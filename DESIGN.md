@@ -170,8 +170,8 @@ A **component** is a single YAML document that decodes into a behavior tree.
 
 Component kinds (all the same artifact, distinguished by a `kind` field): `tool` (model-callable,
 carries a JSON input schema), `command` (user-invoked, e.g. a slash command), `agent` (a turn/loop,
-incl. the default loop and subagents), `persona`/`policy`/`profile` (instruction, gating, and
-endpoint data).
+incl. the default loop and subagents), `view` (a pure presentation transform: typed value →
+`UiTree` — §10), `persona`/`policy`/`profile` (instruction, gating, and endpoint data).
 
 ### Worked examples (these are the whole language)
 
@@ -303,7 +303,7 @@ struct Node : std::variant<All, Any, Action, Condition, Foreach, Repeat> {
 
 struct Component {
     std::string name;                  // `component:`
-    std::string kind;                  // tool | command | agent | persona | policy | profile
+    std::string kind;                  // tool | command | agent | view | persona | policy | profile
     std::vector<std::string> caps;
     std::optional<std::string> description;
     std::optional<Value> parameters;   // model-facing JSON Schema, passed through verbatim
@@ -346,7 +346,7 @@ component's granted capability set, and **executes inside a sandbox child (§7 g
 | `llm.stream` | Network | kernel owns the SSE fold + index-keyed tool-call accumulation; leaf settles one `{text, tool_calls, finish, usage}` per tick |
 | `http.fetch` | Network | **later**; host/scheme allowlist; size/time caps; counts toward lethal-trifecta |
 | `session.append` / `session.read` / `session.fold` | Write/ReadOnly | append-only JSONL; `fold` is a kernel-driven cursor fold for resuming sessions larger than the blackboard |
-| `tui.emit` / `tui.prompt` | Write / *UntrustedInput* | **later**; render to the UI; `tui.prompt` is the blocking human-input effect |
+| `ui.emit` / `ui.prompt` | Write / *UntrustedInput* | **M8**; `ui.emit` hands a finished `UiTree` value (§10) to the frontend — the only render effect, and it refuses `Secret` values; `ui.prompt` is the blocking human-input effect (its result is untrusted input). Neither can produce consent chrome (§7) |
 | `subagent.spawn` | Exec | **later**; child over a sub-tree with caps ⊆ parent (statically checked), depth/tick/token-bounded |
 | `dispatch` | Dispatch | kernel resolves a tool-call's `name` → its registered tool component and ticks it. Route authority and effect authority are separate: the caller needs only dispatch, the selected tool's own caps are checked at dispatch time |
 | `clock.now` / `rand.bytes` | ReadOnly | **later**; the *only* time/entropy sources; seedable for replayable runs |
@@ -372,8 +372,13 @@ v0 ships the minimum the default loop needs (`bool.is_true`, `coll.is_empty`), g
 - **Strings/data (growing set):** `str.replace/slice/split/join/lines/trim/case`,
   `template.render` (typed, per-destination-escaped holes `${name:ShellArg|PathSeg|JsonStr|PlainStr}`),
   `diff.unified`, `json.get/parse/stringify`, `obj.build/merge`, `list.*`, `num.add/sub`.
-- **Domain constructors:** `msg.system/user/assistant/tool_result`, typed UiEvent builders,
-  `err.last`.
+- **Domain constructors:** `msg.system/user/assistant/tool_result`, `err.last`.
+- **UI constructors (pure, zero-cap):** the closed widget vocabulary for building `UiTree` values
+  (§10) — `ui.text`/`ui.markdown`, `ui.row`/`ui.column`/`ui.group`, `ui.card`, `ui.kv`, `ui.code`,
+  `ui.diff`, `ui.list`, `ui.collapsible`, `ui.status`/`ui.progress`, and `ui.action` (a named
+  affordance hint — never an event handler). A new widget is a reviewed in-tree change, same rule
+  as any primitive. **There is deliberately no `ui.approval`:** consent surfaces are kernel chrome
+  (§7, §10), not data.
 
 ## 7. Capability & authority model — and the ground truth
 
@@ -412,6 +417,10 @@ Invariants:
   something a component can do to itself.
 - **Fail closed.** No OS enforcement floor available (off-Linux, or kernel too old for the needed
   Landlock ABI) ⇒ deny. Never degrade to interpreter-only confinement.
+- **Consent never flows through data.** Approval prompts, trust cards, authority/risk diffs, and
+  policy status are kernel-rendered chrome drawn from kernel-owned data; component-emitted UI can
+  neither produce, occlude, nor restyle it (§10). A spoofed approval dialog is the UI-layer analog
+  of a sandbox escape, and it is designed out the same way: the constructor does not exist.
 
 ### Sandbox specifics — native syscalls, zero dependencies
 
@@ -495,15 +504,46 @@ hash-pinned user-level trust record.
 - **Templating (later):** `template.render` fills only typed, per-destination-escaped holes from
   refs — injection-safe by construction; escapers are pure kernel functions.
 
-## 10. Frontends
+## 10. Frontends & UI-as-data
+
+The view layer makes the loop-as-data bet a second time: **views are data too.**
+
+- **`UiTree`:** a finite typed widget-tree value built from the closed `ui.*` constructor
+  vocabulary (§6). It carries structure and affordance hints only — no coordinates, no free
+  colors (semantic style tags at most), no focus state, no event handlers.
+- **`view` components:** pure transforms from a typed value (a tool result, a status record) to a
+  `UiTree`. Views declare `caps: []` and the loader enforces it — a view override therefore adds
+  **no authority by construction**, so the trust review for a custom view is presentation-only.
+- **Frontends are `UiTree` interpreters.** The FTXUI TUI renders a tree as cells and cards; the
+  readline frontend renders the *same tree* as indented plain text. One view component serves
+  every frontend, including future ones. Frontends own focus, scrolling, selection, and the event
+  loop; none of that state appears in the tree.
+- **Default views ship as embedded components** (generated constexpr IR, consteval-checked like
+  everything else): tool-result cards, status lines, catalog entries. A tool component may name a
+  custom view for its output; agent-proposed views arrive through the standard override → check →
+  trust path (§7) — this is how agents design their own UI elements, safely.
+- **Chrome.** Approval prompts, trust cards, authority/risk diffs, and policy status are
+  kernel-rendered from kernel-owned data. Component views cannot produce, occlude, or restyle
+  them — the browser model: content draws inside its viewport; it never draws the address bar or
+  the permission prompt. Data that feeds a consent decision never flows through a view.
+- **Interaction stays kernel-owned.** `ui.action` is a named affordance ("key `r` → dispatch this
+  component with this value") that the frontend maps to a dispatch or runtime action. Components
+  never handle events, so totality holds: a view walk is one bounded tree transform.
+- **Streaming stays events.** Deltas are kernel events rendered live by the frontend; views render
+  *settled* values. A live stream is not a widget tree.
+- **What is refused:** cell/coordinate drawing, free colors, key handlers, layout arithmetic — an
+  imperative GUI toolkit in YAML is the badly-designed-language trap, it breaks totality, and it
+  makes chrome spoofing trivial. The vocabulary stays semantic and small.
+
+Concrete frontends:
 
 - **v0: readline.** `stdin` line loop + streamed deltas to stdout + tool activity lines, consuming
-  the runtime event channel. This is the end-to-end proof vehicle, not a throwaway: the runtime is
-  frontend-agnostic and the readline frontend stays.
-- **TUI: FTXUI** (vendored, itself zero-dependency) — follow-tail scrollback, wrapping input,
-  selectable/collapsible transcript segments, slash commands, component authority cards, trust
-  prompts. Unidirectional state + `update`/`view`; no business logic in the view. A raw-ANSI
-  floor is the fallback if FTXUI disappoints.
+  the runtime event channel. The end-to-end proof vehicle, not a throwaway: it later gains the
+  plain-text `UiTree` renderer and stays.
+- **TUI: FTXUI** (vendored, itself zero-dependency), built as a `UiTree` interpreter from day one —
+  follow-tail scrollback, wrapping input, selectable/collapsible transcript segments, slash
+  commands, kernel-chrome trust/approval surfaces. Unidirectional state + `update`/`view`; no
+  business logic in the renderer. A raw-ANSI floor is the fallback if FTXUI disappoints.
 
 ## 11. Config, sessions, components on disk
 
@@ -614,7 +654,9 @@ The ledger from §1, made operational:
   trifecta rejection); **sandbox enforcement tests** (denied paths/syscalls actually fail — fs
   confinement, TCP, UDP; real dev tools still run under the exec policy; Linux-gated);
   **loader-child tests** (hostile YAML → confined failure, pipe-protocol fuzz); **SSE/stream
-  tests** (fragment accumulation over recorded captures); and eventually the **golden suite**
+  tests** (fragment accumulation over recorded captures); **view tests** (golden `UiTree`
+  snapshots for every default view; render smoke through both frontend interpreters); and
+  eventually the **golden suite**
   asserting every default component produces its expected effect trace — the living proof of the
   thesis.
 
@@ -632,8 +674,8 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
 | M5 | Runtime: effect prims, registry, events, turn execution | the wiring |
 | M6 | **Loop-as-data**: embedded `turn.yaml` (consteval-checked) + readline frontend, live end-to-end | **the central bet** |
 | M7 | fs/search/exec primitives + tool components under the sandbox | a useful agent |
-| M8 | FTXUI TUI | daily-drivable |
-| M9 | Trust & self-modification: `component.check`/`catalog`, override diffs, trust records | the authority story complete |
+| M8 | UI-as-data (`UiTree`, `ui.*`, `view` kind) + FTXUI TUI as tree interpreter | the view layer is data too |
+| M9 | Trust & self-modification: `component.check`/`catalog`, override diffs, trust records, custom-view acceptance | the authority story complete; agents design their own UI |
 | M10 | Polish: config, sessions/resume, packaging | |
 | P2 | MCP client, native non-OpenAI providers | **[PHASE 2]** |
 
@@ -654,3 +696,5 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
    needs real suspension.
 10. **Generated-IR format:** C++ designated-initializer literals (readable diffs) vs embedded
     compile-time-parsed bytes. Lean: literals.
+11. **v0 widget vocabulary:** the exact `ui.*` constructor set to ship at M8 (start with ~ten
+    semantic widgets; additions are reviewed in-tree changes, same rule as primitives).

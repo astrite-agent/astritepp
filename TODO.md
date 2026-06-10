@@ -173,14 +173,35 @@ The hygiene story must be real before any feature code exists.
 - [ ] End-to-end confinement check: model-driven read outside the workspace denied; child network
       denied; real build/test commands succeed inside.
 
-## M8 — TUI (`src/frontends/tui/`)
+## M8 — UI-as-data + TUI (`src/frontends/tui/`)
 
-- [ ] Spike FTXUI vs raw-ANSI floor; decide (DESIGN §18.5).
+*The loop-as-data bet, made a second time: views are data too (DESIGN §10).*
+
+- [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
+      `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,
+      `collapsible`, `status`/`progress`, `action` (affordance hint, never an event handler).
+      **No `ui.approval` — consent surfaces are kernel chrome.**
+- [ ] `view` component kind: pure typed value → `UiTree`; `caps: []` enforced by the loader, so a
+      view override adds no authority by construction.
+- [ ] `ui.emit` effect (hands a finished tree to the frontend; refuses `Secret` values) +
+      `ui.prompt` (the blocking human-input effect; result is untrusted input).
+- [ ] Spike FTXUI vs raw-ANSI floor; decide (DESIGN §18.5). Either way the frontend is a
+      **`UiTree` interpreter from day one** — no bespoke per-card rendering code, ever.
+- [ ] Readline frontend gains the trivial plain-text `UiTree` renderer (same trees, both
+      frontends).
+- [ ] Default views as embedded components (consteval-checked): tool-result card, status line,
+      transcript segments; tool components may name a view for their output.
+- [ ] **Chrome invariant:** approval/trust/authority-diff/policy surfaces are kernel-rendered;
+      component trees cannot produce, occlude, or restyle them.
+- [ ] Interaction: `action` affordances resolve to dispatch/runtime actions; focus, scrolling,
+      selection are frontend-owned; streaming deltas stay events — views render settled values.
 - [ ] Event loop merging terminal input + the runtime event channel; streaming tokens append into
       the transcript; Enter submits; Ctrl-C/Ctrl-D quit; resize-safe; logs to file, never the
       terminal.
 - [ ] Then iterate toward: follow-tail scrollback + manual scroll, collapsible/selectable
       segments, slash commands, command palette, JSONL tail hydration + paged older records.
+- [ ] Tests: golden `UiTree` snapshots for every default view; render smoke through both
+      interpreters.
 
 ## M9 — Trust & self-modification
 
@@ -195,6 +216,9 @@ The hygiene story must be real before any feature code exists.
       outright) via `ASTRITE_AUTHORITY_POLICY`.
 - [ ] Propose/accept flow: model-proposed components are inert until re-checked + consented
       (same path as any disk override).
+- [ ] Custom/agent-proposed `view` components through the same override → check → trust path;
+      `caps: []` means the authority diff is empty by construction, so review is
+      presentation-only. *The payoff: agents design their own UI elements.*
 
 ## M10 — Polish
 
@@ -222,4 +246,4 @@ The hygiene story must be real before any feature code exists.
 
 Tracked in DESIGN §18: modules vs headers; test framework; `-fno-exceptions` confirmation;
 `box<T>` → `std::indirect`; TUI library; approval-mode names; secrets backend; packaging; seccomp
-endgame; coroutine ticks; generated-IR format.
+endgame; coroutine ticks; generated-IR format; v0 widget vocabulary.
