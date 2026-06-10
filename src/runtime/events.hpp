@@ -1,0 +1,94 @@
+#pragma once
+
+// The sealed runtime event vocabulary frontends consume, and a small bounded
+// channel. Exactly one terminal event (TurnFinished | TurnError) ends each turn;
+// the consumer must drain to it.
+
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+
+namespace astrite::runtime {
+
+struct Started {};
+struct AssistantDelta {
+    std::string text;
+};
+struct AssistantSettled {
+    std::string text;
+};
+struct ToolStarted {
+    std::string id;
+    std::string name;
+    std::string arguments;
+};
+struct ToolFinished {
+    std::string id;
+    std::string name;
+    std::string content;
+};
+struct TurnFinished {};
+struct TurnError {
+    std::string message;
+};
+
+using Event = std::variant<Started, AssistantDelta, AssistantSettled, ToolStarted, ToolFinished,
+                           TurnFinished, TurnError>;
+
+class EventChannel {
+public:
+    explicit EventChannel(std::size_t capacity = 1024) : capacity_(capacity) {}
+
+    void push(Event e) {
+        std::unique_lock lock(mu_);
+        not_full_.wait(lock, [&] { return q_.size() < capacity_ || closed_; });
+        if (closed_) {
+            return;
+        }
+        q_.push_back(std::move(e));
+        not_empty_.notify_one();
+    }
+
+    // Blocking pop; nullopt only after close() with an empty queue.
+    [[nodiscard]] std::optional<Event> pop() {
+        std::unique_lock lock(mu_);
+        not_empty_.wait(lock, [&] { return !q_.empty() || closed_; });
+        return take_front_locked();
+    }
+
+    [[nodiscard]] std::optional<Event> try_pop() {
+        std::lock_guard lock(mu_);
+        return take_front_locked();
+    }
+
+    void close() {
+        std::lock_guard lock(mu_);
+        closed_ = true;
+        not_empty_.notify_all();
+        not_full_.notify_all();
+    }
+
+private:
+    std::optional<Event> take_front_locked() {
+        if (q_.empty()) {
+            return std::nullopt;
+        }
+        Event e = std::move(q_.front());
+        q_.pop_front();
+        not_full_.notify_one();
+        return e;
+    }
+
+    std::mutex mu_;
+    std::condition_variable not_empty_;
+    std::condition_variable not_full_;
+    std::deque<Event> q_;
+    std::size_t capacity_;
+    bool closed_ = false;
+};
+
+} // namespace astrite::runtime

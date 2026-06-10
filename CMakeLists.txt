@@ -46,5 +46,10 @@ add_library(astrite_llm STATIC
 )
 target_link_libraries(astrite_llm PUBLIC astrite_core CURL::libcurl)
 
+add_library(astrite_runtime STATIC
+    src/runtime/runtime.cpp
+)
+target_link_libraries(astrite_runtime PUBLIC astrite_llm)
+
 enable_testing()
 add_subdirectory(tests)
