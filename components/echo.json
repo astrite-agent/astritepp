@@ -1,0 +1,14 @@
+{
+  // Demo tool: proves dispatch + the tool round trip with zero capabilities.
+  "component": "echo",
+  "kind": "tool",
+  "caps": [],
+  "description": "Echo the given text back to the model.",
+  "parameters": {
+    "type": "object",
+    "properties": {"text": {"type": "string", "description": "Text to echo back."}},
+    "required": ["text"]
+  },
+  "tree": {"do": "obj.build", "with": {"echoed": {"ref": "input.text"}}, "as": "out"},
+  "output": {"ref": "out"}
+}

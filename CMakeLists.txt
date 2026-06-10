@@ -51,5 +51,17 @@ add_library(astrite_runtime STATIC
 )
 target_link_libraries(astrite_runtime PUBLIC astrite_llm)
 
+# Embed the default components at configure time. (The consteval authority fold
+# upgrades this to generated constexpr IR + static_assert later in M6.)
+file(READ ${CMAKE_SOURCE_DIR}/components/turn.json TURN_JSON)
+file(READ ${CMAKE_SOURCE_DIR}/components/echo.json ECHO_JSON)
+configure_file(cmake/embedded_components.hpp.in generated/embedded_components.hpp @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    components/turn.json components/echo.json)
+
+add_executable(astrite src/frontends/readline/main.cpp)
+target_include_directories(astrite PRIVATE ${CMAKE_BINARY_DIR}/generated)
+target_link_libraries(astrite PRIVATE astrite_runtime)
+
 enable_testing()
 add_subdirectory(tests)

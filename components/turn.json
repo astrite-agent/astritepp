@@ -1,0 +1,59 @@
+{
+  // The whole ReAct loop, as data — the central bet (DESIGN §4). The driver only
+  // appends the user message and walks this component once: it reads the
+  // transcript, calls the model, dispatches requested tools, appends results,
+  // and re-ticks until the model stops asking for tools or the bound runs out.
+  "component": "turn",
+  "kind": "agent",
+  "caps": ["session.read", "session.append", "llm.stream", "dispatch"],
+  "tree": {
+    "repeat": {
+      "max": 16,
+      "until": {"when": "bool.is_true", "with": {"in": {"ref": "done"}}},
+      "body": {
+        "all": [
+          // context = the event-sourced log
+          {"do": "session.read", "as": "ctx"},
+          // kernel owns the SSE fold; the leaf settles ONE value
+          {
+            "do": "llm.stream",
+            "with": {"messages": {"ref": "ctx.messages"}, "tools": {"ref": "cfg.tools"}},
+            "as": "resp"
+          },
+          {"do": "session.append", "with": {"record": {"ref": "resp.message"}}},
+          {"do": "coll.is_empty", "with": {"in": {"ref": "resp.tool_calls"}}, "as": "done"},
+          {
+            "any": [
+              // model asked for no tools → turn done
+              {"when": "bool.is_true", "with": {"in": {"ref": "done"}}},
+              // else run each requested tool
+              {
+                "foreach": {
+                  "over": {"ref": "resp.tool_calls"},
+                  "as": "tc",
+                  "body": {
+                    "all": [
+                      // kernel resolves tc.name → a registered tool component,
+                      // checking that component's own authority at dispatch time
+                      {"do": "dispatch", "with": {"call": {"ref": "tc"}}, "as": "out"},
+                      {
+                        "do": "obj.build",
+                        "with": {
+                          "role": "tool",
+                          "tool_call_id": {"ref": "out.tool_call_id"},
+                          "content": {"ref": "out.content"}
+                        },
+                        "as": "tool_msg"
+                      },
+                      {"do": "session.append", "with": {"record": {"ref": "tool_msg"}}}
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

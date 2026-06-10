@@ -117,31 +117,31 @@ The hygiene story must be real before any feature code exists.
 
 ## M4 — LLM client (`src/llm/`) — system libcurl + glaze
 
-- [ ] OpenAI-compatible streaming: `POST {base}/chat/completions`, `stream:true`, SSE via
+- [x] OpenAI-compatible streaming: `POST {base}/chat/completions`, `stream:true`, SSE via
       blocking curl easy handle + write-callback line accumulator (no scanner-style line-length
       trap; cap line/total growth).
-- [ ] **Index-keyed tool-call fragment accumulation** across chunks (the sharp edge): index is
+- [x] **Index-keyed tool-call fragment accumulation** across chunks (the sharp edge): index is
       untrusted (map key only, never an allocation size); id/name overwrite, arguments append;
       cap 64 distinct calls; incomplete entries filtered.
-- [ ] Settle to one `{text, tool_calls, finish, usage}` value + assistant message (`content:null`
+- [x] Settle to one `{text, tool_calls, finish, usage}` value + assistant message (`content:null`
       for pure tool-call turns); `on_delta(text)` sink for live render.
-- [ ] Cancellation: curl progress callback checks `std::stop_token`.
-- [ ] Config from env: `OPENAI_API_KEY` (required), `OPENAI_MODEL`, `OPENAI_BASE_URL`.
-- [ ] Recorded SSE fixture captures in `tests/` drive the unit tests; **live verification**
+- [x] Cancellation: curl progress callback checks `std::stop_token`.
+- [x] Config from env: `OPENAI_API_KEY` (required), `OPENAI_MODEL`, `OPENAI_BASE_URL`.
+- [x] Recorded SSE fixture captures in `tests/` drive the unit tests; **live verification**
       against a real endpoint (streamed text + tool-call round trip) is the milestone gate.
 - [ ] Fuzz target: SSE/tool-call accumulator.
 
 ## M5 — Runtime (`src/runtime/`)
 
-- [ ] Effect prims: `llm.stream` (wraps M4), `session.read`/`session.append` (append-only JSONL
+- [x] Effect prims: `llm.stream` (wraps M4), `session.read`/`session.append` (append-only JSONL
       at `.astrite/sessions/current.jsonl`), `ctx.get`.
-- [ ] Registry wiring: pure prims + effects + `dispatch` into a `kernel::Context`.
-- [ ] `Runtime`: config, registry, components map (duplicate names rejected), session log;
+- [x] Registry wiring: pure prims + effects + `dispatch` into a `kernel::Context`.
+- [x] `Runtime`: config, registry, components map (duplicate names rejected), session log;
       workspace/doctrine system prompt seeded once on empty log (DESIGN §8 — names workspace
       root, override dir, session log, policy, tools; omits secrets).
-- [ ] `submit_user_message(text)`: append user msg → walk(`turn`) on a worker `std::jthread` →
+- [x] `submit_user_message(text)`: append user msg → walk(`turn`) on a worker `std::jthread` →
       typed events; serialized (one turn at a time); exactly one terminal event per turn.
-- [ ] Event channel: bounded MPSC of a sealed event variant (`Started, AssistantDelta,
+- [x] Event channel: bounded MPSC of a sealed event variant (`Started, AssistantDelta,
       AssistantSettled, ToolStarted, ToolFinished, TurnFinished, TurnError, Notice`); consumer
       must drain to the terminal event (document the contract).
 - [ ] TSan job over runtime/channel tests.
@@ -150,19 +150,23 @@ The hygiene story must be real before any feature code exists.
 
 *The central bet. Everything before this exists to make this milestone honest.*
 
-- [ ] `components/turn.json` per DESIGN §4 + a trivial `echo.json` tool component.
+- [x] `components/turn.json` per DESIGN §4 + a trivial `echo.json` tool component.
 - [ ] `tools/gen_components`: build-time JSONC → **constexpr IR literals** (in-tree C++, same
       toolchain, uses the same loader decode); generated designated-initializer code is
       committed-diff-readable.
 - [ ] **`static_assert(reached_authority(c) ⊆ c.caps)` for every embedded component** — a default
       that exceeds its declared caps is a compile error.
-- [ ] Disk override path: `.astrite/components/<name>.json` via the M3 confined loader + M2
+- [x] Disk override path: `.astrite/components/<name>.json` via the M3 confined loader + M2
       authority fold (override preferred over embedded — hot-swap).
-- [ ] Readline frontend (`src/frontends/readline/`): stdin loop, stream `AssistantDelta` live,
+- [x] Readline frontend (`src/frontends/readline/`): stdin loop, stream `AssistantDelta` live,
       print tool activity, renderer-settled handshake so the prompt never races streamed output.
-- [ ] **END TO END:** chat with a live model — multi-turn, streamed text, tool dispatch through
+- [x] **END TO END:** chat with a live model — multi-turn, streamed text, tool dispatch through
       `turn.json`, session persistence across restarts, **hot-swap** (edit `turn.json`, behavior
-      changes with no recompile). ← *primary goal met here.*
+      changes with no recompile). ← *primary goal met here.* **Done 2026-06-10**: live tool
+      round trip + restart persistence + echo.json disk-override hot-swap all verified.
+      Sprint notes: SSE fixtures are synthesized (recorded captures still wanted); embedding
+      is configure-time strings (gen_components consteval IR + static_assert still open);
+      overrides load un-gated with a loud stderr warning until M9.
 
 ## M7 — Real tools under the sandbox
 

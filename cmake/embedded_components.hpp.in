@@ -1,0 +1,19 @@
+#pragma once
+
+// GENERATED at configure time from components/*.json — do not edit.
+// The embedded defaults; disk overrides under .astrite/components/ win.
+
+#include <string_view>
+#include <utility>
+
+namespace astrite::components {
+
+inline constexpr std::string_view TURN_JSONC = R"astrite(@TURN_JSON@)astrite";
+inline constexpr std::string_view ECHO_JSONC = R"astrite(@ECHO_JSON@)astrite";
+
+inline constexpr std::pair<std::string_view, std::string_view> ALL[] = {
+    {"turn", TURN_JSONC},
+    {"echo", ECHO_JSONC},
+};
+
+} // namespace astrite::components
