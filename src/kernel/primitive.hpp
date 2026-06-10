@@ -1,0 +1,58 @@
+#pragma once
+
+#include <cstdint>
+#include <expected>
+#include <functional>
+#include <map>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include "kernel/error.hpp"
+#include "schema/ir.hpp"
+#include "schema/value.hpp"
+
+namespace astrite::kernel {
+
+enum class Status : std::uint8_t { success, failure };
+
+// The closed primitive catalog at runtime. Effects are registered as closures by
+// the runtime (capturing their confined context); the kernel only ever sees
+// args-object → result-or-error.
+class Registry {
+public:
+    using Fn = std::function<std::expected<schema::Value, KernelError>(const schema::Value& args)>;
+
+    void add(std::string name, Fn fn) { prims_.insert_or_assign(std::move(name), std::move(fn)); }
+
+    [[nodiscard]] const Fn* find(std::string_view name) const {
+        auto it = prims_.find(name);
+        return it == prims_.end() ? nullptr : &it->second;
+    }
+
+private:
+    std::map<std::string, Fn, std::less<>> prims_;
+};
+
+// Optional evaluator observer used by frontends/runtimes for progress events.
+// It receives stable kernel facts, not UI instructions.
+class EvalObserver {
+public:
+    virtual ~EvalObserver() = default;
+    virtual void tool_started(std::string_view /*id*/, std::string_view /*name*/,
+                              std::string_view /*arguments*/) {}
+    virtual void tool_finished(std::string_view /*id*/, std::string_view /*name*/,
+                               std::string_view /*content*/) {}
+};
+
+using ComponentMap = std::map<std::string, schema::Component, std::less<>>;
+
+// The evaluation context: the primitive registry, plus the component registry
+// the `dispatch` builtin resolves tool-call names against.
+struct Context {
+    const Registry* primitives;
+    const ComponentMap* components;
+    EvalObserver* observer = nullptr;
+};
+
+} // namespace astrite::kernel

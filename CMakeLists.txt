@@ -35,6 +35,7 @@ target_include_directories(doctest SYSTEM INTERFACE ${CMAKE_SOURCE_DIR}/third_pa
 # schema + kernel; the only TU that defines the rapidyaml implementation is load.cpp.
 add_library(astrite_core STATIC
     src/schema/load.cpp
+    src/kernel/eval.cpp
 )
 target_include_directories(astrite_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(astrite_core PUBLIC third_party)
