@@ -1,0 +1,16 @@
+{
+  // List a workspace directory (one level, sorted, symlinks omitted; directories
+  // marked with a trailing slash). Omit `path` or pass "." for the workspace root.
+  "component": "fs_list",
+  "kind": "tool",
+  "caps": ["fs.list"],
+  "description": "List the entries of a workspace directory.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {"type": "string", "description": "Workspace-relative directory (default: root)."}
+    }
+  },
+  "tree": {"do": "fs.list", "with": {"path": {"ref": "input.path", "default": "."}}, "as": "out"},
+  "output": {"ref": "out"}
+}

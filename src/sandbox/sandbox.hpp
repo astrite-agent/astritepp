@@ -31,7 +31,28 @@ struct Policy {
 // NOTE: `body` runs after fork in a child that does not exec immediately, so it
 // must stay async-signal-safe-ish (no touching parent locks). This is the test
 // and single-threaded path; the runtime's production delivery is fork+exec
-// (task.run, M7) and self-re-exec (fs helpers / confined loader, M3/M7).
+// (task.run, M7) and self-re-exec (fs helpers, below).
 [[nodiscard]] int run_confined(const Policy& policy, const std::function<int()>& body);
+
+// The result of a confined fs operation: `ok` is the child's clean exit; `output`
+// is the captured payload (file content / listing / matches) or the error text.
+struct OpResult {
+    bool ok = false;
+    std::string output;
+};
+
+// Run a read-only fs op in a fresh, confined child via self-re-exec:
+// fork + exec(/proc/self/exe __sbx <op> <base> <rel> [extra]), which applies the
+// ratchet read-confined to `base` and performs the op. This is safe to call from
+// a multithreaded process — the child execs immediately into a clean address
+// space. `op` is "read" | "list" | "find"; `rel` is relative to `base` ("" for
+// the base root); `extra` is the pattern for "find".
+[[nodiscard]] OpResult run_fs_op(const std::string& op, const std::filesystem::path& base,
+                                 const std::string& rel, const std::string& extra = "");
+
+// The hidden-subcommand entry point. Frontends (and the test binary) call this
+// first in main(): if argv is a `__sbx` invocation it runs the confined op and
+// returns the exit code; otherwise it returns -1 and main() proceeds normally.
+[[nodiscard]] int maybe_run_helper(int argc, char** argv);
 
 } // namespace astrite::sandbox

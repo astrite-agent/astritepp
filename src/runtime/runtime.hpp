@@ -27,6 +27,7 @@ using ChatFn = std::function<std::expected<llm::CompletedTurn, std::string>(
 
 struct Options {
     std::filesystem::path session_file;
+    std::filesystem::path workspace_root; // absolute fs base; empty → current_path()
     std::string system_prompt;
     kernel::ComponentMap components; // must contain the agent component `turn`
     ChatFn chat;                     // empty → built from env (OPENAI_API_KEY…)

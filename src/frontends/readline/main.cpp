@@ -12,12 +12,18 @@
 
 #include "frontends/common.hpp"
 #include "runtime/runtime.hpp"
+#include "sandbox/sandbox.hpp"
 #include "util/overloaded.hpp"
 
 namespace fs = std::filesystem;
 using namespace astrite;
 
-int main() {
+int main(int argc, char** argv) {
+    // First: serve a self-re-exec sandbox helper invocation, if that's what we are.
+    if (int rc = sandbox::maybe_run_helper(argc, argv); rc >= 0) {
+        return rc;
+    }
+
     auto components = frontends::load_components();
     if (!components.has_value()) {
         std::fprintf(stderr, "astrite: component load failed: %s\n", components.error().c_str());

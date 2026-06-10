@@ -19,6 +19,7 @@
 #include "frontends/common.hpp"
 #include "frontends/tui/transcript.hpp"
 #include "runtime/runtime.hpp"
+#include "sandbox/sandbox.hpp"
 
 namespace {
 
@@ -46,8 +47,12 @@ ftxui::Element render_segment(const astrite::tui::Segment& s) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     using namespace ftxui;
+
+    if (int rc = astrite::sandbox::maybe_run_helper(argc, argv); rc >= 0) {
+        return rc;
+    }
 
     auto components = astrite::frontends::load_components();
     if (!components.has_value()) {

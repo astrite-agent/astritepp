@@ -1,0 +1,15 @@
+{
+  // Read a workspace file. The fs.read effect confines the path internally
+  // (belt: path.resolve) and runs in a Landlock-confined child (suspenders).
+  "component": "fs_read",
+  "kind": "tool",
+  "caps": ["fs.read"],
+  "description": "Read a UTF-8 text file from the workspace.",
+  "parameters": {
+    "type": "object",
+    "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}},
+    "required": ["path"]
+  },
+  "tree": {"do": "fs.read", "with": {"path": {"ref": "input.path"}}, "as": "out"},
+  "output": {"ref": "out"}
+}

@@ -67,8 +67,9 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       kernel): per-base path rules (read = read/list/exec; write adds create/write/remove),
       net deny-all by handling net + adding no net rules. `system_read_exec_paths()` grants the
       existing toolchain dirs.
-- [ ] Self-re-exec child delivery: hidden subcommand, one artifact, one trust root. **→ M3/M7**
-      (the confined loader and fs helpers own this; `run_confined` fork helper exists now).
+- [x] Self-re-exec child delivery: hidden `__sbx` subcommand, one artifact, one trust root —
+      done with M7b's fs helpers (`run_fs_op` forks+execs `/proc/self/exe`). The confined loader
+      (M3) reuses the same mechanism.
 - [ ] Child env hygiene: `clearenv()` + minimal envp + clean HOME. **→ M7** (fork+exec path).
 - [ ] Fork+pre-exec path for `task.run` children. **→ M7.**
 - [x] **Enforcement tests (Linux-gated):** read/write confined to base; `AF_INET`/`AF_INET6`
@@ -183,14 +184,18 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
 
 *The second bet (no shell — DESIGN §6) starts collecting evidence here.*
 
-- [ ] `path.resolve` (untrusted string + base anchor → confined `PathRef@base` or structured
-      failure, no fs touch) and `json.coerce` (untrusted JSON → declared shape or failure) — the
-      trust-boundary pair.
-- [ ] fs primitives via sandbox children: `fs.read`/`fs.list`/`fs.write`/`fs.edit`/`fs.delete`/
-      `fs.mkdir`/`fs.rename` (4 MiB caps, bounded sorted listings, exact-match edit with expected
-      count, non-recursive delete, no-overwrite rename, symlinks not followed).
-- [ ] `search.find`: bounded sorted workspace text search; literal matching first (linear-time
-      regex engine only if/when justified — never backtracking).
+- [x] `path.resolve` + `json.coerce` — the trust-boundary pair (M7a, pure zero-cap prims).
+- [x] **Self-re-exec delivery (M1's deferred item), done M7b**: hidden `__sbx` subcommand;
+      `run_fs_op` forks + execs `/proc/self/exe` into a fresh confined child (safe from a
+      multithreaded host — execs immediately), reads the framed result over a pipe. Frontends +
+      test binary dispatch the helper first in `main()`.
+- [x] fs **read** primitives via sandbox children: `fs.read` (4 MiB cap, rejects dirs),
+      `fs.list` (bounded sorted listing, dirs marked, symlinks omitted). Belt (`path.resolve`)
+      in the prim + suspenders (Landlock read-confined child). **Write half**
+      (`fs.write`/`fs.edit`/`fs.delete`/`fs.mkdir`/`fs.rename`) still pending — needs the
+      write-confined helper + transaction story.
+- [x] `search.find`: bounded literal text search (path:line:text, capped); skips symlinks,
+      binary files, and VCS/build state dirs. (Linear-time regex engine only if/when justified.)
 - [ ] `task` component kind (DESIGN §4/§6): pinned argv template with typed, shape-validated
       holes (`ident`/`path-seg`/enum/int-range; **never option position**; `--` separators pinned
       in the template), cwd anchor, effect class (`check` | `produce` + declared product paths),
@@ -208,11 +213,14 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       first contact.
 - [ ] Argument-injection corpus: leading-dash hole values rejected, option-position holes
       rejected at load, pinned `--` honored.
-- [ ] Tool components: `fs_read.json`, `fs_list.json`, `fs_write.json`, `fs_edit.json`,
-      `search_find.json`, `workspace_context.json`, `path_resolve.json`, `json_coerce.json`;
-      dogfood task components for astrite++ itself (`build`, `test`, `lint`).
-- [ ] End-to-end confinement check: model-driven read outside the workspace denied; task network
-      denied unless declared; astrite++'s own build/test run as `check` tasks in scratch.
+- [x] Read tool components embedded + authority-checked: `fs_read.json`, `fs_list.json`,
+      `search_find.json`. (`fs_write`/`fs_edit`, `workspace_context`, dogfood task components
+      pending with the write/task half.)
+- [x] End-to-end confinement check (live, 2026-06-10): model listed `components/`, read
+      `echo.json`, and an attempted `/etc/hostname` read was rejected by the belt
+      (`absolute path is an escape`); the suspenders (Landlock denying `..` past the base even
+      when the belt is bypassed) are proven in the fs-helper unit tests. Task network/scratch
+      checks land with the task half.
 
 ## M8 — UI-as-data + TUI (`src/frontends/tui/`)
 

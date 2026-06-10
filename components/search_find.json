@@ -1,0 +1,22 @@
+{
+  // Literal text search across the workspace, returning path:line:text matches
+  // (bounded). Skips symlinks, binary files, and VCS/build state dirs.
+  "component": "search_find",
+  "kind": "tool",
+  "caps": ["search.find"],
+  "description": "Search workspace files for a literal string.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pattern": {"type": "string", "description": "Literal text to find."},
+      "path": {"type": "string", "description": "Workspace-relative subtree (default: root)."}
+    },
+    "required": ["pattern"]
+  },
+  "tree": {
+    "do": "search.find",
+    "with": {"pattern": {"ref": "input.pattern"}, "path": {"ref": "input.path", "default": "."}},
+    "as": "out"
+  },
+  "output": {"ref": "out"}
+}

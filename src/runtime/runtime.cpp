@@ -6,7 +6,9 @@
 #include "kernel/blackboard.hpp"
 #include "kernel/eval.hpp"
 #include "kernel/prims.hpp"
+#include "kernel/trust.hpp"
 #include "llm/client.hpp"
+#include "sandbox/sandbox.hpp"
 
 namespace astrite::runtime {
 
@@ -38,6 +40,10 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
     if (!opts.components.contains("turn")) {
         return std::unexpected("runtime: no `turn` component registered");
     }
+    if (opts.workspace_root.empty()) {
+        std::error_code ec;
+        opts.workspace_root = std::filesystem::current_path(ec);
+    }
     if (!opts.chat) {
         auto cfg = llm::Config::from_env();
         if (!cfg.has_value()) {
@@ -64,7 +70,94 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
     return runtime;
 }
 
+namespace {
+
+// Belt: confine a model-supplied path string to a workspace-relative rel via the
+// trust-boundary primitive. Returns the rel, or a KernelError carrying the reason
+// (which dispatch surfaces to the model as recoverable content).
+std::expected<std::string, kernel::KernelError> confine(const Value& args, const char* prim) {
+    const Value* path_v = args.get("path");
+    if (path_v == nullptr || path_v->as_str() == nullptr) {
+        return std::unexpected(kernel::KernelError{std::string(prim) + ": `path` must be a string"});
+    }
+    Value rq = Value::object();
+    rq.set("path", *path_v);
+    rq.set("base", Value::str("workspace"));
+    Value resolved = kernel::resolve_path(rq);
+    const Value* ok = resolved.get("ok");
+    if (ok == nullptr || ok->as_bool() == nullptr || !*ok->as_bool()) {
+        const Value* reason = resolved.get("reason");
+        return std::unexpected(kernel::KernelError{
+            std::string(prim) + ": " +
+            (reason != nullptr && reason->as_str() != nullptr ? *reason->as_str() : "bad path")});
+    }
+    return *resolved.get("rel")->as_str();
+}
+
+// list/find may target the base root, which path.resolve rejects (empty rel);
+// "." and "" mean "the workspace root" here.
+std::expected<std::string, kernel::KernelError> confine_dir(const Value& args, const char* prim) {
+    const Value* path_v = args.get("path");
+    if (path_v == nullptr || path_v->as_str() == nullptr || path_v->as_str()->empty() ||
+        *path_v->as_str() == ".") {
+        return std::string{}; // root
+    }
+    return confine(args, prim);
+}
+
+} // namespace
+
 void Runtime::register_effects() {
+    const std::filesystem::path base = opts_.workspace_root;
+
+    registry_.add_effect(
+        "fs.read", "fs.read",
+        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+            auto rel = confine(args, "fs.read");
+            if (!rel.has_value()) {
+                return std::unexpected(rel.error());
+            }
+            sandbox::OpResult r = sandbox::run_fs_op("read", base, *rel);
+            if (!r.ok) {
+                return std::unexpected(kernel::KernelError{r.output.empty() ? "fs.read failed"
+                                                                            : r.output});
+            }
+            return Value::str(std::move(r.output));
+        });
+    registry_.add_effect(
+        "fs.list", "fs.list",
+        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+            auto rel = confine_dir(args, "fs.list");
+            if (!rel.has_value()) {
+                return std::unexpected(rel.error());
+            }
+            sandbox::OpResult r = sandbox::run_fs_op("list", base, *rel);
+            if (!r.ok) {
+                return std::unexpected(kernel::KernelError{r.output.empty() ? "fs.list failed"
+                                                                            : r.output});
+            }
+            return Value::str(std::move(r.output));
+        });
+    registry_.add_effect(
+        "search.find", "search.find",
+        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+            const Value* pattern = args.get("pattern");
+            if (pattern == nullptr || pattern->as_str() == nullptr) {
+                return std::unexpected(
+                    kernel::KernelError{"search.find: `pattern` must be a string"});
+            }
+            auto rel = confine_dir(args, "search.find");
+            if (!rel.has_value()) {
+                return std::unexpected(rel.error());
+            }
+            sandbox::OpResult r = sandbox::run_fs_op("find", base, *rel, *pattern->as_str());
+            if (!r.ok) {
+                return std::unexpected(kernel::KernelError{r.output.empty() ? "search.find failed"
+                                                                            : r.output});
+            }
+            return Value::str(std::move(r.output));
+        });
+
     registry_.add_effect(
         "session.read", "session.read",
         [this](const Value&) -> std::expected<Value, kernel::KernelError> {

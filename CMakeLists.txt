@@ -66,15 +66,19 @@ target_link_libraries(astrite_llm PUBLIC astrite_core CURL::libcurl)
 add_library(astrite_runtime STATIC
     src/runtime/runtime.cpp
 )
-target_link_libraries(astrite_runtime PUBLIC astrite_llm)
+target_link_libraries(astrite_runtime PUBLIC astrite_llm astrite_sandbox)
 
 # Embed the default components at configure time. (The consteval authority fold
 # upgrades this to generated constexpr IR + static_assert later in M6.)
 file(READ ${CMAKE_SOURCE_DIR}/components/turn.json TURN_JSON)
 file(READ ${CMAKE_SOURCE_DIR}/components/echo.json ECHO_JSON)
+file(READ ${CMAKE_SOURCE_DIR}/components/fs_read.json FS_READ_JSON)
+file(READ ${CMAKE_SOURCE_DIR}/components/fs_list.json FS_LIST_JSON)
+file(READ ${CMAKE_SOURCE_DIR}/components/search_find.json SEARCH_FIND_JSON)
 configure_file(cmake/embedded_components.hpp.in generated/embedded_components.hpp @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    components/turn.json components/echo.json)
+    components/turn.json components/echo.json components/fs_read.json
+    components/fs_list.json components/search_find.json)
 
 add_executable(astrite src/frontends/readline/main.cpp)
 target_include_directories(astrite PRIVATE ${CMAKE_BINARY_DIR}/generated)
