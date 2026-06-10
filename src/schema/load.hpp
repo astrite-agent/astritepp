@@ -12,10 +12,12 @@ struct LoadError {
     std::string message;
 };
 
-// Decode one YAML document into a Component, fail-closed: unknown fields, duplicate
-// keys, wrong shapes, and zero-or-two node discriminators are all load errors.
-// NOTE (sprint): this currently parses in-process; M3 moves the parse into the
-// confined loader child (DESIGN §7).
-[[nodiscard]] std::expected<Component, LoadError> load_component_yaml(std::string_view yaml);
+// Decode one JSONC document (JSON + // and /* */ comments) into a Component,
+// fail-closed: unknown fields, missing required fields, wrong shapes, and
+// zero-or-two node discriminators are all load errors. JSONC is the canonical
+// component format: the smallest grammar at the trust boundary, handled by the
+// same mature parser that reads untrusted model output. (M3 additionally moves
+// parsing of untrusted component files into the confined loader child.)
+[[nodiscard]] std::expected<Component, LoadError> load_component_jsonc(std::string_view jsonc);
 
 } // namespace astrite::schema

@@ -5,7 +5,7 @@
 > **What this is:** a secure, fast, flexible coding agent in modern C++ (C++23 floor, C++26
 > trajectory). No dynamic-language runtime, no plugin loader, **and no executable extension code
 > of any kind** — not even sandboxed bytecode/WASM. The agent's behavior is *data*: declarative
-> **components** (behavior trees in YAML) interpreted by a small C++ kernel over a closed set of
+> **components** (behavior trees in JSONC) interpreted by a small C++ kernel over a closed set of
 > primitives. The default agent is itself built from this mechanism, which is the proof the
 > mechanism is expressive enough.
 >
@@ -47,7 +47,8 @@ packages, each able to execute code at install or build time. Measured against t
   language, stdlib, and toolchain are themselves a supply-chain and stability risk for a
   security-first project.
 
-astrite++'s budget: **three vendored source libraries plus system libcurl** (§12, §14). No package
+astrite++'s budget: **two vendored source libraries plus system libcurl** (a third, FTXUI,
+arrives with the TUI — §12, §14). No package
 manager, no registry resolution, no install hooks, no build-time code execution by dependencies.
 Every third-party line is pinned source in `third_party/`, reviewable in one sitting. The sandbox
 layer is **zero** dependencies — raw syscalls (§7).
@@ -77,17 +78,18 @@ for v0.
 ### The honest ledger
 
 C++ has no memory-safety guarantee, and the place that bites is exactly where the kernel touches
-attacker-influenced bytes: project-local component YAML (a planted config file is an attack) and
+attacker-influenced bytes: project-local component files (a planted config file is an attack) and
 model-emitted JSON. astrite++ answers with architecture, not assertion:
 
 1. **Style floor.** The kernel is value-semantic tree-walking over variants and maps — no manual
    `new`/`delete`, no pointer arithmetic, no shared mutable state. Enforced by clang-tidy,
    hardened stdlib modes, sanitizer CI, and permanent fuzz targets (§15).
-2. **Mature, fuzzed parsers** for the two untrusted-input formats — never hand-rolled (§12).
-3. **Confine the parser like an effect** (§7). Untrusted YAML is parsed inside the same
-   no-fs/no-net sandbox child machinery every effect already uses. A parser bug is a confined
-   crash, not kernel compromise. This is the C++-specific design move, and it *sharpens* the
-   thesis: even the kernel treats its own loader as untrusted-input handling.
+2. **One mature, fuzzed parser** for every untrusted-input format — never hand-rolled, and the
+   format chosen for the smallest grammar (§12: JSONC, not YAML).
+3. **Confine the parser like an effect** (§7). Untrusted component files are parsed inside the
+   same no-fs/no-net sandbox child machinery every effect already uses. A parser bug is a
+   confined crash, not kernel compromise. This is the C++-specific design move, and it *sharpens*
+   the thesis: even the kernel treats its own loader as untrusted-input handling.
 
 The result is a defense-in-depth story where the OS floor — which never depended on language
 safety — does the same job it always did, and the layer above it is hardened, fuzzed, and
@@ -110,8 +112,12 @@ security wins.
   OpenAI, vLLM, llama.cpp server, LM Studio, OpenRouter, and Anthropic's compat endpoint by
   config alone.
 
-YAML is not the security boundary. The security boundary is the closed primitive catalog, typed
-schema validation, capability analysis, explicit trust/consent points, and the sandbox.
+The component format is not the security boundary. The security boundary is the closed primitive
+catalog, typed schema validation, capability analysis, explicit trust/consent points, and the
+sandbox. The format is still chosen adversarially: components are **JSONC** (JSON plus comments) —
+the smallest grammar that stays human-auditable, handled by the same mature parser that reads
+untrusted model output. YAML was rejected for its grammar attack surface: anchors/aliases
+(billion-laughs), tags, merge keys, indentation rules, and scalar-typing ambiguity.
 
 **Non-goals (v0):** executable/plugin extensions of any kind including **WASM** (rejected outright —
 §6); MCP (**[PHASE 2]**); native non-OpenAI protocols (**[PHASE 2]**); Windows/macOS sandbox
@@ -129,7 +135,7 @@ kind of artifact*: a **component**.
 ```
               ┌──────────────────────── astrite++ kernel (C++) ──────────────────────┐
               │                                                                       │
-  YAML        │   loader            evaluator            primitive catalog            │
+  JSONC       │   loader            evaluator            primitive catalog            │
  component ──▶│  confined parse ──▶ walk behavior  ──▶  effect | predicate | transform│
               │  + typed decode     tree, tick by                  │                  │
               │  + authority-fold   tick (total)                   ▼                  │
@@ -160,9 +166,9 @@ a result. Data flows through a structural `{ref: …}` lookup convention that ne
 
 ## 4. Components
 
-A **component** is a single YAML document that decodes into a behavior tree.
+A **component** is a single JSONC document that decodes into a behavior tree.
 
-- **Load:** parse the YAML (in the confined loader child — §7), validate against the component
+- **Load:** parse the JSONC (in the confined loader child — §7), validate against the component
   **schema** (§5), then run the **authority fold** (§7). **If anything fails to match, abort —
   fail closed.**
 - **Run:** **walk the tree.** Each node is either a *composition* keyword or a *leaf* that invokes
@@ -177,63 +183,86 @@ incl. the default loop and subagents), `view` (a pure presentation transform: ty
 
 A built-in tool, `fs_edit` — exact-match replacement over a sandboxed primitive:
 
-```yaml
-component: fs_edit
-kind: tool
-caps: [fs.edit]
-tree:
-  all:
-    - do: fs.edit
-      with:
-        path: { ref: input.path }
-        old_text: { ref: input.old_text }
-        new_text: { ref: input.new_text }
-        expected_replacements: { ref: input.expected_replacements, default: 1 }
-      as: out
-output: {ref: out}
+```jsonc
+{
+  "component": "fs_edit",
+  "kind": "tool",
+  "caps": ["fs.edit"],
+  "tree": {
+    "all": [
+      {
+        "do": "fs.edit",
+        "with": {
+          "path": {"ref": "input.path"},
+          "old_text": {"ref": "input.old_text"},
+          "new_text": {"ref": "input.new_text"},
+          "expected_replacements": {"ref": "input.expected_replacements", "default": 1}
+        },
+        "as": "out"
+      }
+    ]
+  },
+  "output": {"ref": "out"}
+}
 ```
 
 The core loop, `turn` — the bounded ReAct loop expressed as data:
 
-```yaml
-component: turn
-kind: agent
-caps: [session.read, session.append, llm.stream, dispatch]
-tree:
-  repeat:
-    max: 16
-    until: { when: bool.is_true, with: { in: {ref: done} } }
-    body:
-      all:
-        - do: session.read           # context = the event-sourced log
-          as: ctx
-        - do: llm.stream             # kernel owns the SSE fold; the leaf settles ONE value
-          with: { messages: {ref: ctx.messages}, tools: {ref: cfg.tools} }
-          as: resp
-        - do: session.append
-          with: { record: {ref: resp.message} }
-        - do: coll.is_empty
-          with: { in: {ref: resp.tool_calls} }
-          as: done
-        - any:
-            - when: bool.is_true     # model asked for no tools → turn done
-              with: { in: {ref: done} }
-            - foreach:               # else run each requested tool
-                over: {ref: resp.tool_calls}
-                as: tc
-                body:
-                  all:
-                    - do: dispatch   # kernel resolves tc.name → a registered tool component
-                      with: { call: {ref: tc} }
-                      as: out
-                    - do: obj.build
-                      with:
-                        role: tool
-                        tool_call_id: {ref: out.tool_call_id}
-                        content: {ref: out.content}
-                      as: tool_msg
-                    - do: session.append
-                      with: { record: {ref: tool_msg} }
+```jsonc
+{
+  "component": "turn",
+  "kind": "agent",
+  "caps": ["session.read", "session.append", "llm.stream", "dispatch"],
+  "tree": {
+    "repeat": {
+      "max": 16,
+      "until": {"when": "bool.is_true", "with": {"in": {"ref": "done"}}},
+      "body": {
+        "all": [
+          // context = the event-sourced log
+          {"do": "session.read", "as": "ctx"},
+          // kernel owns the SSE fold; the leaf settles ONE value
+          {
+            "do": "llm.stream",
+            "with": {"messages": {"ref": "ctx.messages"}, "tools": {"ref": "cfg.tools"}},
+            "as": "resp"
+          },
+          {"do": "session.append", "with": {"record": {"ref": "resp.message"}}},
+          {"do": "coll.is_empty", "with": {"in": {"ref": "resp.tool_calls"}}, "as": "done"},
+          {
+            "any": [
+              // model asked for no tools → turn done
+              {"when": "bool.is_true", "with": {"in": {"ref": "done"}}},
+              // else run each requested tool
+              {
+                "foreach": {
+                  "over": {"ref": "resp.tool_calls"},
+                  "as": "tc",
+                  "body": {
+                    "all": [
+                      // kernel resolves tc.name → a registered tool component
+                      {"do": "dispatch", "with": {"call": {"ref": "tc"}}, "as": "out"},
+                      {
+                        "do": "obj.build",
+                        "with": {
+                          "role": "tool",
+                          "tool_call_id": {"ref": "out.tool_call_id"},
+                          "content": {"ref": "out.content"}
+                        },
+                        "as": "tool_msg"
+                      },
+                      {"do": "session.append", "with": {"record": {"ref": "tool_msg"}}}
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
 ```
 
 The "keep going until no tool-calls or budget" loop is the component's bounded `repeat`. `dispatch`
@@ -244,7 +273,8 @@ project's central proof milestone.**
 
 ## 5. The component schema
 
-The schema is the closed grammar YAML is validated against — and the schema *is* the typed IR.
+The schema is the closed grammar a component document is validated against — and the schema *is*
+the typed IR.
 There is no hand-rolled string-dispatch validation pass; an unknown key, a wrong shape, or a node
 with zero or two discriminator keys fails the decode with a location.
 
@@ -316,11 +346,13 @@ struct Component {
 
 `box<T>` is a small value-semantic heap indirection (deep copy, deep compare); it becomes
 `std::indirect<T>` verbatim when stdlibs ship C++26. The walk is `std::visit` over an overload set
-with no catch-all — **compile-time exhaustive**. Loader strategy: parse YAML to a generic tree
-(rapidyaml, inside the confined child — §7), then a ~150-line typed decode enforcing
-exactly-one-of-six discriminator keys and rejecting unknown fields, mirroring the schema above.
-Embedded defaults skip the runtime path entirely: a build-time generator emits them as constexpr
-IR literals (§7).
+with no catch-all — **compile-time exhaustive**. Loader strategy: glaze decodes JSONC directly
+into wire-shape types — field mapping derived from `glz::meta` declarations, the node sum type
+auto-deduced from which discriminator key is present, unknown keys rejected, required fields
+enforced — followed by a typed wire→IR conversion under an exhaustive visit. Exactly two custom
+readers are hand-written: `ArgValue` (the `{ref}`/`{ref, default}`/literal split is custom
+syntax) and `Value` (generic data). Embedded defaults skip the runtime path entirely: a
+build-time generator emits them as constexpr IR literals (§7).
 
 ## 6. The primitive catalog
 
@@ -396,7 +428,7 @@ Policy modes: `review` trust-gates authority/risk increases; `strict` rejects ne
 lethal-trifecta paths outright.
 
 **Compile-time fold for embedded defaults.** The build generates constexpr IR from
-`components/*.yaml` (`tools/gen_components`), and the authority fold — already a pure tree walk —
+`components/*.json` (`tools/gen_components`), and the authority fold — already a pure tree walk —
 runs in `consteval`: `static_assert(reached_authority(turn) ⊆ turn.caps)` for every embedded
 component. A default component that exceeds its declared capabilities is a *compile error*. Disk
 overrides still go through the full runtime path, so hot-swap is unaffected.
@@ -445,14 +477,16 @@ code at all**:
 
 ### The confined loader (C++-specific, load-bearing)
 
-Untrusted bytes get parsed by C/C++ parsers; a parser bug must not be kernel compromise. So the
-loader reuses the effect-child machinery: **component YAML from disk is parsed in a no-fs, no-net,
-rlimited self-re-exec child**, which returns either the typed IR over a pipe in a dumb
+Untrusted bytes get parsed by C/C++ parsers; a parser bug must not be kernel compromise. The
+first defense is the format itself: JSONC has no anchors, tags, merge keys, or indentation
+grammar, so whole attack classes (billion-laughs expansion among them) are impossible by
+construction. The second is confinement: **component files from disk are parsed in a no-fs,
+no-net, rlimited self-re-exec child**, which returns either the typed IR over a pipe in a dumb
 length-prefixed encoding, or a structured error. The kernel-side decoder of that pipe protocol is
-deliberately trivial (fixed tags, length checks, depth caps) — the complex, grammar-shaped attack
-surface (YAML anchors, indentation, UTF-8 edge cases) never runs in the kernel's address space.
-A malformed or hostile component file produces a confined child abort and a clean "rejected:
-parse failure" — which is also exactly the fail-closed behavior the trust model wants.
+deliberately trivial (fixed tags, length checks, depth caps) — the grammar-shaped attack surface
+never runs in the kernel's address space. A malformed or hostile component file produces a
+confined child abort and a clean "rejected: parse failure" — which is also exactly the
+fail-closed behavior the trust model wants.
 
 Trust: project-local components are **untrusted by default** (a planted config file is an attack).
 An override is schema-checked, name-checked, authority-checked, reported with capability and
@@ -532,7 +566,7 @@ The view layer makes the loop-as-data bet a second time: **views are data too.**
 - **Streaming stays events.** Deltas are kernel events rendered live by the frontend; views render
   *settled* values. A live stream is not a widget tree.
 - **What is refused:** cell/coordinate drawing, free colors, key handlers, layout arithmetic — an
-  imperative GUI toolkit in YAML is the badly-designed-language trap, it breaks totality, and it
+  imperative GUI toolkit in component data is the badly-designed-language trap, it breaks totality, and it
   makes chrome spoofing trivial. The vocabulary stays semantic and small.
 
 Concrete frontends:
@@ -550,7 +584,7 @@ Concrete frontends:
 - **Config:** env vars first (`OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL`,
   `ASTRITE_AUTHORITY_POLICY`); TOML at the platform config dir + per-project `.astrite/` later.
 - **Components:** the default agent ships as embedded built-in components (generated constexpr IR);
-  users override them under `.astrite/components/<name>.yaml` (disk override preferred — this is
+  users override them under `.astrite/components/<name>.json` (disk override preferred — this is
   what makes the loop hot-swappable). Overrides go through the confined loader + authority fold +
   trust gate.
 - **Sessions:** append-only JSONL at `.astrite/sessions/current.jsonl` — the event-sourced
@@ -567,14 +601,14 @@ Concrete frontends:
 | Exceptions / RTTI | `-fno-exceptions -fno-rtti` (lean) | `std::expected` at every boundary; parser aborts are confined to the loader child, where abort *is* fail-closed |
 | Concurrency | `std::jthread` + `std::stop_token` + bounded MPSC | no async runtime, no executor |
 | HTTP/TLS | **system libcurl** | easy API, blocking, write-callback SSE, HTTP/2 free; same trust class as libc — not a vendored dependency |
-| YAML | **rapidyaml** (vendored) | parsed only inside the confined loader child; anchor expansion bounded (billion-laughs guard) |
-| JSON | **glaze** (vendored, header-only, zero-dep) | exception-free; rejects unknown keys by default |
+| Component format | **JSONC** (`.json` + comments) | smallest grammar at the trust boundary; YAML rejected: anchors (billion-laughs), tags, indentation, scalar ambiguity |
+| JSON/JSONC | **glaze** (vendored, header-only, zero-dep) | one parser for components, model output, and sessions; `glz::meta`-derived typed decode; rejects unknown keys by default |
 | Regex | RE2-class only if/when needed | linear-time guarantee; **no backtracking engine, ever** |
 | TUI | **FTXUI** (vendored) — later milestone | readline frontend first |
 | Errors | `std::expected<T, Error>` + monadic ops | typed error enums per layer; no exceptions, no errno soup |
 | Logging | stderr first; structured later | |
 | Tests | Catch2 amalgamated or doctest (vendored, dev-only) | open decision — §18 |
-| Fuzzing | libFuzzer targets: loader pipe decode, YAML→IR, SSE, `json.coerce` | permanent CI smoke + growing corpus |
+| Fuzzing | libFuzzer targets: loader pipe decode, JSONC→IR, SSE, `json.coerce` | permanent CI smoke + growing corpus |
 | Sandbox | raw syscalls: `prctl(2)`, `seccomp(2)`, `landlock_*(2)` | **zero dependencies**; constexpr BPF |
 
 ## 13. Project layout
@@ -587,9 +621,9 @@ directories (`astrite::schema`, `astrite::kernel`, …). Named C++ modules are a
 astrite++/
 ├─ CMakeLists.txt            # Ninja, pinned toolchain, vendored deps only, hardening flags
 ├─ DESIGN.md / TODO.md
-├─ third_party/              # vendored, pinned source: rapidyaml, glaze, (ftxui, test fw)
+├─ third_party/              # vendored, pinned source: glaze, (ftxui, test fw)
 ├─ tools/
-│  └─ gen_components/        # build-time YAML → constexpr IR codegen (in-tree C++, same toolchain)
+│  └─ gen_components/        # build-time JSONC → constexpr IR codegen (in-tree C++, same toolchain)
 ├─ src/
 │  ├─ schema/                # Value, ArgValue, Node, Component; pipe-protocol types
 │  ├─ kernel/                # walk, blackboard, refs, authority fold + trace, registry
@@ -600,13 +634,13 @@ astrite++/
 │  └─ frontends/
 │     ├─ readline/           # v0 frontend (stays)
 │     └─ tui/                # FTXUI frontend (later)
-├─ components/               # the DEFAULT AGENT, as data (turn.yaml, fs_read.yaml, …)
+├─ components/               # the DEFAULT AGENT, as data (turn.json, fs_read.json, …)
 └─ tests/                    # unit + enforcement + golden traces; tests/fuzz/ targets
 ```
 
 ## 14. Dependency hygiene — the reason this project exists
 
-- **Vendored source only.** Three libraries (`rapidyaml`, `glaze`, later `ftxui`) plus a dev-only
+- **Vendored source only.** Two libraries (`glaze`, later `ftxui`) plus a dev-only
   test framework live in `third_party/` as pinned, hash-recorded source — no package manager, no
   registry resolution, no `FetchContent` at configure time, **no install- or build-time code
   execution by dependencies**. Updating a dependency is a reviewed diff like any other.
@@ -632,7 +666,7 @@ The ledger from §1, made operational:
 - **Sanitizer CI:** ASan+UBSan on the full test suite every commit; TSan on the runtime/channel
   tests; MSan or Valgrind where practical.
 - **Permanent fuzzing:** libFuzzer targets on every untrusted-input decoder — the loader pipe
-  protocol, the YAML→IR decode (run inside *and* outside the child in fuzz builds), the SSE/
+  protocol, the JSONC→IR decode (run inside *and* outside the child in fuzz builds), the SSE/
   tool-call accumulator, `json.coerce`. Corpus checked in; CI smoke-fuzzes per commit.
 - **Architectural distrust:** the confined loader child (§7) — the grammar-shaped parsing attack
   surface never runs in the kernel's address space.
@@ -653,7 +687,7 @@ The ledger from §1, made operational:
   dispatch tracing, a directory scan that loads and checks every bundled component, strict-mode
   trifecta rejection); **sandbox enforcement tests** (denied paths/syscalls actually fail — fs
   confinement, TCP, UDP; real dev tools still run under the exec policy; Linux-gated);
-  **loader-child tests** (hostile YAML → confined failure, pipe-protocol fuzz); **SSE/stream
+  **loader-child tests** (hostile JSONC → confined failure, pipe-protocol fuzz); **SSE/stream
   tests** (fragment accumulation over recorded captures); **view tests** (golden `UiTree`
   snapshots for every default view; render smoke through both frontend interpreters); and
   eventually the **golden suite**
@@ -672,7 +706,7 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
 | M3 | Confined loader child | parser bugs are confined crashes |
 | M4 | LLM client: curl SSE + tool-call accumulation | streaming sharp edge handled |
 | M5 | Runtime: effect prims, registry, events, turn execution | the wiring |
-| M6 | **Loop-as-data**: embedded `turn.yaml` (consteval-checked) + readline frontend, live end-to-end | **the central bet** |
+| M6 | **Loop-as-data**: embedded `turn.json` (consteval-checked) + readline frontend, live end-to-end | **the central bet** |
 | M7 | fs/search/exec primitives + tool components under the sandbox | a useful agent |
 | M8 | UI-as-data (`UiTree`, `ui.*`, `view` kind) + FTXUI TUI as tree interpreter | the view layer is data too |
 | M9 | Trust & self-modification: `component.check`/`catalog`, override diffs, trust records, custom-view acceptance | the authority story complete; agents design their own UI |
@@ -685,8 +719,9 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
    `astrite.kernel`) once the pinned toolchain handles them without friction.
 2. **Test framework:** Catch2 v3 amalgamated (active, two files) vs doctest (single header,
    quieter maintenance). Dev-only either way.
-3. **`-fno-exceptions` confirmation** once rapidyaml's error-callback path is validated in the
-   child (abort-in-child is acceptable fail-closed behavior; confirm ergonomics).
+3. **`-fno-exceptions` for product binaries.** glaze is exception-free, so nothing in the product
+   path needs exceptions; the holdout is test-build ergonomics (doctest's assertion machinery).
+   Decide when CI splits test and product flag sets.
 4. **`box<T>` now → `std::indirect<T>`** migration timing as stdlibs ship it.
 5. **TUI:** FTXUI vs raw-ANSI floor — decide at M8 with a spike.
 6. **Approval mode names/defaults** (`read-only` / `auto-edit` / `full-auto`).

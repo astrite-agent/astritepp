@@ -1,7 +1,7 @@
-// YAML → typed IR, serde-style: the schema lives in the wire-type definitions and
+// JSONC → typed IR, serde-style: the schema lives in the wire-type definitions and
 // their glz::meta declarations. glaze derives the field plumbing — unknown keys
-// rejected (yaml_opts default), required fields enforced (error_on_missing_keys),
-// and the node sum type auto-deduced from which discriminator key is present.
+// rejected (opts default), required fields enforced (error_on_missing_keys), and
+// the node sum type auto-deduced from which discriminator key is present.
 // Exactly two custom readers are hand-written, same as the Rust original: ArgValue
 // (the {ref}/{ref,default}/literal split is custom syntax) and Value (generic data).
 // The wire→IR conversion below is typed field moves, visited exhaustively.
@@ -16,9 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include <glaze/yaml.hpp>
-
-#include "schema/value_json.hpp" // detail::Gen + from_gen (format-agnostic)
+#include "schema/value_json.hpp" // detail::Gen + from_gen
 #include "util/overloaded.hpp"
 
 namespace astrite::schema::wire {
@@ -272,32 +270,17 @@ Result<Node> to_ir(const wire::Node& w) {
 
 } // namespace
 
-std::expected<Component, LoadError> load_component_yaml(std::string_view yaml) {
-    // Two stages. Stage 1: one document-level generic YAML parse (glaze's typed-member
-    // YAML path mishandles nested multi-entry block maps in v7.8.0 — see TODO.md note;
-    // the document-level generic path is solid). Stage 2: serialize to JSON and run
-    // glaze's mature JSON typed reader: variant key-deduction, unknown keys rejected,
-    // required fields enforced. This split is also the confined-loader shape (M3): the
-    // sandboxed child will own stage 1 and ship JSON over the pipe.
-    std::string buf(yaml);
-    detail::Gen g{};
-    if (auto ec = glz::read_yaml(g, buf)) {
-        return std::unexpected(LoadError{"YAML parse error: " + glz::format_error(ec, buf)});
-    }
-    auto json = glz::write_json(g);
-    if (!json) {
-        return std::unexpected(LoadError{"internal: generic→json failed"});
-    }
-
+std::expected<Component, LoadError> load_component_jsonc(std::string_view jsonc) {
+    std::string buf(jsonc);
     wire::Component w;
-    auto ec = glz::read<glz::opts{.error_on_missing_keys = true}>(w, *json);
+    auto ec = glz::read<glz::opts{.comments = true, .error_on_missing_keys = true}>(w, buf);
     if (ec) {
         if (ec.ec == glz::error_code::no_matching_variant_type) {
             return std::unexpected(LoadError{
                 "a node must have exactly one of: all, any, do, when, foreach, repeat\n" +
-                glz::format_error(ec, *json)});
+                glz::format_error(ec, buf)});
         }
-        return std::unexpected(LoadError{glz::format_error(ec, *json)});
+        return std::unexpected(LoadError{glz::format_error(ec, buf)});
     }
 
     Component c;

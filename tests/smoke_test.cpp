@@ -2,7 +2,6 @@
 #include <doctest.h>
 
 #include <glaze/json.hpp>
-#include <glaze/yaml.hpp>
 
 TEST_CASE("glaze round-trips generic json") {
     glz::generic json{};
@@ -12,12 +11,4 @@ TEST_CASE("glaze round-trips generic json") {
     auto out = glz::write_json(json);
     REQUIRE(out.has_value());
     CHECK(out->find("\"a\"") != std::string::npos);
-}
-
-TEST_CASE("glaze reads yaml into generic") {
-    glz::generic g{};
-    std::string y = "component: smoke\nkind: tool\n";
-    auto err = glz::read_yaml(g, y);
-    REQUIRE_FALSE(err);
-    CHECK(g["component"].get<std::string>() == "smoke");
 }
