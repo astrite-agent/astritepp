@@ -242,6 +242,16 @@ The hygiene story must be real before any feature code exists.
 - [ ] Linux-gated sandbox enforcement tests must run in CI (a runner with Landlock ≥ ABI V1), not
       only locally.
 
+## Known third-party issues
+
+- **glaze v7.8.0 YAML reader**: nested multi-entry block-style mappings read into
+  map-typed members (std::map or generic) lose indent context after the first entry
+  and misattribute the next key to the parent object. Document-level generic reads are
+  unaffected. Loader works around it with a two-stage parse (YAML → generic → JSON →
+  typed), which is also the M3 confined-loader shape. Report upstream; recheck on the
+  next glaze bump. Canonical "exactly one discriminator" load-error wording is M3
+  loader polish (today glaze's deduction reports missing_key/unknown_key).
+
 ## Open decisions
 
 Tracked in DESIGN §18: modules vs headers; test framework; `-fno-exceptions` confirmation;

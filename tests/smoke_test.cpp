@@ -1,17 +1,8 @@
 // Toolchain smoke: the vendored libs compile under our flag set and do something trivial.
 #include <doctest.h>
 
-#define RYML_SINGLE_HDR_DEFINE_NOW
-#include <rapidyaml.hpp>
-
 #include <glaze/json.hpp>
-
-TEST_CASE("rapidyaml parses a scalar map") {
-    ryml::Tree tree = ryml::parse_in_arena("component: smoke\nkind: tool\n");
-    ryml::ConstNodeRef root = tree.rootref();
-    CHECK(root.is_map());
-    CHECK(root["component"].val() == "smoke");
-}
+#include <glaze/yaml.hpp>
 
 TEST_CASE("glaze round-trips generic json") {
     glz::generic json{};
@@ -21,4 +12,12 @@ TEST_CASE("glaze round-trips generic json") {
     auto out = glz::write_json(json);
     REQUIRE(out.has_value());
     CHECK(out->find("\"a\"") != std::string::npos);
+}
+
+TEST_CASE("glaze reads yaml into generic") {
+    glz::generic g{};
+    std::string y = "component: smoke\nkind: tool\n";
+    auto err = glz::read_yaml(g, y);
+    REQUIRE_FALSE(err);
+    CHECK(g["component"].get<std::string>() == "smoke");
 }

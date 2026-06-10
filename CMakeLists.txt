@@ -26,12 +26,18 @@ endif()
 # Vendored third-party headers are SYSTEM includes so our warning wall stays ours.
 add_library(third_party INTERFACE)
 target_include_directories(third_party SYSTEM INTERFACE
-    ${CMAKE_SOURCE_DIR}/third_party/rapidyaml
     ${CMAKE_SOURCE_DIR}/third_party/glaze
 )
 
 add_library(doctest INTERFACE)
 target_include_directories(doctest SYSTEM INTERFACE ${CMAKE_SOURCE_DIR}/third_party/doctest)
+
+# schema + kernel; the only TU that defines the rapidyaml implementation is load.cpp.
+add_library(astrite_core STATIC
+    src/schema/load.cpp
+)
+target_include_directories(astrite_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(astrite_core PUBLIC third_party)
 
 enable_testing()
 add_subdirectory(tests)
