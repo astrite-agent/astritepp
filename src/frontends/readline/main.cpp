@@ -4,75 +4,21 @@
 // components; this file is plumbing.
 
 #include <cstdio>
-#include <expected>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <optional>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
 
-#include "embedded_components.hpp"
+#include "frontends/common.hpp"
 #include "runtime/runtime.hpp"
-#include "schema/load.hpp"
 #include "util/overloaded.hpp"
 
 namespace fs = std::filesystem;
 using namespace astrite;
 
-namespace {
-
-std::optional<std::string> read_file(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return std::nullopt;
-    }
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    return std::move(ss).str();
-}
-
-std::expected<kernel::ComponentMap, std::string> load_components() {
-    kernel::ComponentMap map;
-    for (const auto& [name, embedded] : components::ALL) {
-        std::string source(embedded);
-        const fs::path override_path =
-            fs::path(".astrite/components") / (std::string(name) + ".json");
-        if (auto disk = read_file(override_path)) {
-            // NOTE(M9): overrides will be trust-gated against the embedded baseline
-            // (capability/risk diffs + hash-pinned records). The sprint loads them
-            // un-gated but never silently.
-            std::fprintf(stderr, "[override] %s loaded from %s (trust gate arrives at M9)\n",
-                         std::string(name).c_str(), override_path.string().c_str());
-            source = std::move(*disk);
-        }
-        auto component = schema::load_component_jsonc(source);
-        if (!component.has_value()) {
-            return std::unexpected(std::string(name) + ": " + component.error().message);
-        }
-        if (component->name != name) {
-            return std::unexpected("component file for `" + std::string(name) +
-                                   "` declares mismatched name `" + component->name + "`");
-        }
-        map.emplace(component->name, std::move(*component));
-    }
-    return map;
-}
-
-std::string system_prompt() {
-    return "You are astrite++, a minimal secure coding agent. Your behavior is declarative "
-           "component data interpreted by a small kernel; effects are capability-gated. "
-           "Workspace root: " +
-           fs::current_path().string() +
-           ". Use the available tools when they help, and answer concisely.";
-}
-
-} // namespace
-
 int main() {
-    auto components = load_components();
+    auto components = frontends::load_components();
     if (!components.has_value()) {
         std::fprintf(stderr, "astrite: component load failed: %s\n", components.error().c_str());
         return 1;
@@ -80,7 +26,7 @@ int main() {
 
     runtime::Options opts;
     opts.session_file = fs::path(".astrite/sessions/current.jsonl");
-    opts.system_prompt = system_prompt();
+    opts.system_prompt = frontends::system_prompt();
     opts.components = std::move(*components);
 
     auto rt = runtime::Runtime::create(std::move(opts));

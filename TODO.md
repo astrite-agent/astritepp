@@ -208,6 +208,14 @@ The hygiene story must be real before any feature code exists.
 
 *The loop-as-data bet, made a second time: views are data too (DESIGN §10).*
 
+- [x] **FTXUI scaffold (pre-UiTree), 2026-06-10**: vendored ftxui v6.1.9 (examples/doc stripped,
+      stub CMakeLists noted in VERSIONS); `astrite-tui` binary — input box (Enter submits,
+      `/quit` exits), follow-tail transcript, per-turn worker thread, event pump repainting on
+      runtime events; transcript state is a pure, unit-tested event fold (`transcript.hpp`)
+      shared-ready for the UiTree interpreter; live-verified under a pty (tool card rendered
+      mid-turn). Warning wall moved to a target-scoped interface so vendored trees build with
+      their own flags. Everything below remains the real M8.
+
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,
       `collapsible`, `status`/`progress`, `action` (affordance hint, never an event handler).

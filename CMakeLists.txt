@@ -3,7 +3,7 @@ project(astrite LANGUAGES CXX)
 
 # Pinned toolchain: clang 21 (apt.llvm.org). Configure with -DCMAKE_CXX_COMPILER=clang++-21.
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    message(WARNING "astrite++ pins clang 18+; building with ${CMAKE_CXX_COMPILER_ID} is untested")
+    message(WARNING "astrite++ pins clang 21; building with ${CMAKE_CXX_COMPILER_ID} is untested")
 endif()
 
 set(CMAKE_CXX_STANDARD 23)
@@ -14,9 +14,12 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF) # headers, not named modules (DESIGN §18.1)
 
 option(ASTRITE_SANITIZE "Build with ASan+UBSan" OFF)
 
-add_compile_options(-Wall -Wextra -Wconversion -Wshadow -Werror -fno-rtti)
-# Exceptions stay ON for now (DESIGN §18.3 open): doctest's assertion machinery and
-# vendored-lib ergonomics want them in test builds; revisit for the release binary.
+# Our warning wall, scoped to our own targets (vendored trees build with their
+# own flags). Exceptions stay ON for now (DESIGN §18.3 open): doctest's assertion
+# machinery wants them in test builds; revisit for the release binary.
+add_library(astrite_flags INTERFACE)
+target_compile_options(astrite_flags INTERFACE
+    -Wall -Wextra -Wconversion -Wshadow -Werror -fno-rtti)
 
 if(ASTRITE_SANITIZE)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -32,12 +35,19 @@ target_include_directories(third_party SYSTEM INTERFACE
 add_library(doctest INTERFACE)
 target_include_directories(doctest SYSTEM INTERFACE ${CMAKE_SOURCE_DIR}/third_party/doctest)
 
+# FTXUI (vendored, zero-dep): builds as its own targets with its own flags.
+set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/ftxui SYSTEM EXCLUDE_FROM_ALL)
+
 add_library(astrite_core STATIC
     src/schema/load.cpp
     src/kernel/eval.cpp
 )
 target_include_directories(astrite_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(astrite_core PUBLIC third_party)
+target_link_libraries(astrite_core PUBLIC third_party astrite_flags)
 
 # System libcurl: trust class of libc, not a vendored dependency (DESIGN §14).
 find_package(CURL REQUIRED)
@@ -62,6 +72,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 add_executable(astrite src/frontends/readline/main.cpp)
 target_include_directories(astrite PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(astrite PRIVATE astrite_runtime)
+
+add_executable(astrite-tui src/frontends/tui/main.cpp)
+target_include_directories(astrite-tui PRIVATE ${CMAKE_BINARY_DIR}/generated)
+target_link_libraries(astrite-tui PRIVATE astrite_runtime ftxui::component)
 
 enable_testing()
 add_subdirectory(tests)

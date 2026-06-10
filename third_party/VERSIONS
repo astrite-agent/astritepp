@@ -3,3 +3,6 @@
 
 glaze      v7.8.0    https://github.com/stephenberry/glaze @ 13adf5d075529c7e15b77963d54eccd9315fa5e1      (include/glaze header tree; JSON + YAML)
 doctest    v2.5.2    https://raw.githubusercontent.com/doctest/doctest/v2.5.2/doctest/doctest.h            (single header, dev-only)
+ftxui      v6.1.9    https://github.com/ArthurSonzogni/FTXUI @ 5cfed50702f52d51c1b189b5f97f8beaf5eaa2a6    (source tree minus examples/doc/tools/.github; zero-dep TUI)
+                     local modification: examples/CMakeLists.txt and doc/CMakeLists.txt are stubs
+                     (upstream includes those dirs unconditionally; contents stripped here)
