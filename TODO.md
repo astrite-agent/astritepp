@@ -2,7 +2,8 @@
 
 Goal: a modern-C++ astrite that runs the **full model loop** (read transcript → stream model →
 dispatch tools → re-tick) as **data** — with native sandboxing, a confined loader, compile-time
-authority checks on the shipped defaults, and a third-party surface small enough to review in one
+authority checks on the shipped defaults, **no shell** (execution is declared task components run
+as transactions — DESIGN §6), and a third-party surface small enough to review in one
 sitting: **2 vendored source libs + system libcurl** (FTXUI arrives with the TUI), zero of which
 execute code at install or build time.
 
@@ -62,7 +63,7 @@ The hygiene story must be real before any feature code exists.
       apply ratchet (`no_new_privs → seccomp → Landlock`) before the op.
 - [ ] Child env hygiene: `clearenv()` + minimal envp + clean HOME (the API key never reaches a
       child).
-- [ ] Fork+pre-exec path for `proc.exec`-style children (policy applied between fork and execve).
+- [ ] Fork+pre-exec path for `task.run` children (policy applied between fork and execve).
 - [ ] **Enforcement tests (Linux-gated):** read/write/list confined to base; TCP connect denied;
       UDP/raw denied via seccomp; real dev tools (`git log`) still run under the exec policy.
 - [ ] Fail-closed: missing Landlock ABI / off-Linux ⇒ structured deny, never silent degrade.
@@ -168,7 +169,9 @@ The hygiene story must be real before any feature code exists.
       is configure-time strings (gen_components consteval IR + static_assert still open);
       overrides load un-gated with a loud stderr warning until M9.
 
-## M7 — Real tools under the sandbox
+## M7 — Real tools under the sandbox: fs/search + tasks & transactions
+
+*The second bet (no shell — DESIGN §6) starts collecting evidence here.*
 
 - [ ] `path.resolve` (untrusted string + base anchor → confined `PathRef@base` or structured
       failure, no fs touch) and `json.coerce` (untrusted JSON → declared shape or failure) — the
@@ -178,13 +181,28 @@ The hygiene story must be real before any feature code exists.
       count, non-recursive delete, no-overwrite rename, symlinks not followed).
 - [ ] `search.find`: bounded sorted workspace text search; literal matching first (linear-time
       regex engine only if/when justified — never backtracking).
-- [ ] `proc.exec` (argv vector, never shell; timeout + output cap) and `proc.exec_scratch`
-      (disposable workspace copy under `.astrite/tmp`, skips generated/private state).
+- [ ] `task` component kind (DESIGN §4/§6): pinned argv template with typed, shape-validated
+      holes (`ident`/`path-seg`/enum/int-range; **never option position**; `--` separators pinned
+      in the template), cwd anchor, effect class (`check` | `produce` + declared product paths),
+      `net` declaration (consent-diffed), timeout, output caps.
+- [ ] `task.run` — the **only** execution primitive, `dispatch`'s twin: verb resolved against the
+      static task table; parameters bind as discrete argv elements; the model selects, never
+      composes.
+- [ ] Transactions: persistent task-scoped scratch (reflink/CoW where the fs supports it; copy +
+      skip-lists elsewhere — caches persist so hermetic stays fast); no network unless declared;
+      settle to `{status, output (capped, untrusted), delta}`; `check` promotes nothing,
+      `produce` promotes only declared product paths; promotion via kernel chrome.
+- [ ] Live-workspace execution = per-invocation kernel-chrome escalation, never grantable;
+      frontend `!command` stays human-composed, human authority.
+- [ ] Project-type detection proposes task candidates (Cargo/CMake/npm…); consent batched at
+      first contact.
+- [ ] Argument-injection corpus: leading-dash hole values rejected, option-position holes
+      rejected at load, pinned `--` honored.
 - [ ] Tool components: `fs_read.json`, `fs_list.json`, `fs_write.json`, `fs_edit.json`,
-      `search_find.json`, `exec.json`, `exec_scratch.json`, `workspace_context.json`,
-      `path_resolve.json`, `json_coerce.json`.
-- [ ] End-to-end confinement check: model-driven read outside the workspace denied; child network
-      denied; real build/test commands succeed inside.
+      `search_find.json`, `workspace_context.json`, `path_resolve.json`, `json_coerce.json`;
+      dogfood task components for astrite++ itself (`build`, `test`, `lint`).
+- [ ] End-to-end confinement check: model-driven read outside the workspace denied; task network
+      denied unless declared; astrite++'s own build/test run as `check` tasks in scratch.
 
 ## M8 — UI-as-data + TUI (`src/frontends/tui/`)
 
@@ -232,6 +250,9 @@ The hygiene story must be real before any feature code exists.
 - [ ] Custom/agent-proposed `view` components through the same override → check → trust path;
       `caps: []` means the authority diff is empty by construction, so review is
       presentation-only. *The payoff: agents design their own UI elements.*
+- [ ] Agent-proposed `task` components through the same path ("run the fuzzer for 60 seconds"):
+      consent card shows exact argv template, scope, effect class, net; hash-pinned on approval.
+      *The payoff: agents grow their own verb set — reviewably.*
 
 ## M10 — Polish
 
@@ -268,4 +289,5 @@ The hygiene story must be real before any feature code exists.
 
 Tracked in DESIGN §18: modules vs headers; test framework; `-fno-exceptions` confirmation;
 `box<T>` → `std::indirect`; TUI library; approval-mode names; secrets backend; packaging; seccomp
-endgame; coroutine ticks; generated-IR format; v0 widget vocabulary.
+endgame; coroutine ticks; generated-IR format; v0 widget vocabulary; bounded job handles for
+interactive/long-running processes (until then: the human-authority `!command` hatch).

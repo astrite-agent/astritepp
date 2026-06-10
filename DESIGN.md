@@ -13,6 +13,9 @@
 > capability.** Agents may rewrite prompts, routing, tool composition, policies, and even their own
 > component data — without gaining the ability to ship new executable code, import dependencies,
 > read secrets, open sockets, or widen their sandbox. Rewrite strategy, not confinement.
+>
+> And there is no shell: the agent selects declared task verbs with typed parameters; nothing in
+> the system ever composes a command line (§6).
 
 ## 0. Status
 
@@ -100,10 +103,13 @@ architecturally distrusted.
 **Pillars, in priority order:** security → stability → speed → flexibility. Where they conflict,
 security wins.
 
-- **Security is the differentiator.** Two rules: (1) **no executable extensions** — extensions are
-  guaranteed-declarative components, never code, so the entire "extension ships and runs attacker
-  code" class is gone by construction; (2) **authority confinement** — the model is *untrusted*,
-  every effect is capability-gated and confined by an OS-level sandbox that fails **closed**.
+- **Security is the differentiator.** Three rules: (1) **no executable extensions** — extensions
+  are guaranteed-declarative components, never code, so the entire "extension ships and runs
+  attacker code" class is gone by construction; (2) **authority confinement** — the model is
+  *untrusted*, every effect is capability-gated and confined by an OS-level sandbox that fails
+  **closed**; (3) **no shell** — the model selects declared task verbs through typed, validated
+  parameter holes; it never composes argv or shell strings, and free-form exec is not in the
+  authority lattice at all (§6).
 - **Stability:** tiny vendored dependency tree; pinned toolchain; deterministic, network-free
   builds; every component provably terminates (the interpreter is total); hardened release builds.
 - **Speed:** native binary, no runtime, no GC, streaming model output rendered incrementally.
@@ -159,10 +165,12 @@ Three properties make this safe rather than "just a programming language with th
    statically-known dispatch targets), enforces the lethal-trifecta rule, and rejects any uncapped
    loop — *before* a single effect fires. For embedded defaults this fold runs at **compile time**.
 
-**There is no expression language and there are no operators.** Boolean logic is the tree
-structure (`AND` = `all`, `OR` = `any`). Comparisons and containment are *predicate primitives*
-that return success/failure. Computation is *transform primitives* that read references and write
-a result. Data flows through a structural `{ref: …}` lookup convention that never computes.
+**There is no expression language, there are no operators, and there is no shell.** Boolean logic
+is the tree structure (`AND` = `all`, `OR` = `any`). Comparisons and containment are *predicate
+primitives* that return success/failure. Computation is *transform primitives* that read
+references and write a result. Data flows through a structural `{ref: …}` lookup convention that
+never computes. Execution follows the same rule: components select declared task verbs with typed
+holes (§6); nothing anywhere composes a command line.
 
 ## 4. Components
 
@@ -177,7 +185,9 @@ A **component** is a single JSONC document that decodes into a behavior tree.
 Component kinds (all the same artifact, distinguished by a `kind` field): `tool` (model-callable,
 carries a JSON input schema), `command` (user-invoked, e.g. a slash command), `agent` (a turn/loop,
 incl. the default loop and subagents), `view` (a pure presentation transform: typed value →
-`UiTree` — §10), `persona`/`policy`/`profile` (instruction, gating, and endpoint data).
+`UiTree` — §10), `task` (a declared execution verb: pinned argv template with typed holes, scope,
+and transaction semantics — §6), `persona`/`policy`/`profile` (instruction, gating, and endpoint
+data).
 
 ### Worked examples (these are the whole language)
 
@@ -203,6 +213,26 @@ A built-in tool, `fs_edit` — exact-match replacement over a sandboxed primitiv
     ]
   },
   "output": {"ref": "out"}
+}
+```
+
+A declared execution verb, `test` — `kind: task` components are declarations, not trees (the
+loader enforces the per-kind shape):
+
+```jsonc
+{
+  // The agent can SELECT this verb; it can never compose argv. Holes are typed,
+  // shape-validated, and never bind in option position.
+  "component": "test",
+  "kind": "task",
+  "task": {
+    "argv": ["cargo", "test", {"hole": "filter", "shape": "ident", "optional": true}],
+    "cwd": "workspace",
+    "effect": "check",        // check | produce — a check task promotes no delta
+    "net": false,             // network is a declared, consent-diffed property
+    "timeout_ms": 600000,
+    "output_cap_bytes": 262144
+  }
 }
 ```
 
@@ -374,7 +404,7 @@ component's granted capability set, and **executes inside a sandbox child (§7 g
 |---|---|---|
 | `fs.read` / `fs.list` / `fs.write` / `fs.edit` / `fs.delete` / `fs.rename` / `fs.mkdir` / `fs.stat` | ReadOnly/Write | `path` is a `PathRef@base` — relative-by-type, rooted at a granted base anchor. `fs.list` returns bounded, sorted entries and does not follow symlinks; `fs.edit` is exact-match replacement with expected match counts; `fs.delete` is non-recursive; `fs.rename` rejects existing targets; 4 MiB read/write caps |
 | `search.find` | ReadOnly | bounded sorted workspace text search; literal or linear-time regex (RE2-class, never backtracking); skips symlinks and generated/private state |
-| `proc.exec` / `proc.exec_scratch` | Exec | `argv` is a **vector**, never a shell string (no shell-injection surface); kernel enforces timeout + output cap. `exec_scratch` runs against a disposable workspace copy |
+| `task.run` | TaskRun | the **only** execution primitive — `dispatch`'s twin (see *Execution: tasks, not a shell*, below). Resolves a verb against the statically-known task-component table; parameters bind into typed, shape-validated holes as discrete argv elements. Transactional by default: task-scoped scratch, no network unless declared, settles to `{status, output, delta}` |
 | `llm.stream` | Network | kernel owns the SSE fold + index-keyed tool-call accumulation; leaf settles one `{text, tool_calls, finish, usage}` per tick |
 | `http.fetch` | Network | **later**; host/scheme allowlist; size/time caps; counts toward lethal-trifecta |
 | `session.append` / `session.read` / `session.fold` | Write/ReadOnly | append-only JSONL; `fold` is a kernel-driven cursor fold for resuming sessions larger than the blackboard |
@@ -402,7 +432,8 @@ v0 ships the minimum the default loop needs (`bool.is_true`, `coll.is_empty`), g
   entry points from untrusted model output into the typed, confined world; everything downstream
   is then statically typed.
 - **Strings/data (growing set):** `str.replace/slice/split/join/lines/trim/case`,
-  `template.render` (typed, per-destination-escaped holes `${name:ShellArg|PathSeg|JsonStr|PlainStr}`),
+  `template.render` (typed, per-destination-validated holes `${name:PathSeg|Ident|JsonStr|PlainStr}`
+  — there is no `ShellArg`, because nothing in the system ever becomes a shell string),
   `diff.unified`, `json.get/parse/stringify`, `obj.build/merge`, `list.*`, `num.add/sub`.
 - **Domain constructors:** `msg.system/user/assistant/tool_result`, `err.last`.
 - **UI constructors (pure, zero-cap):** the closed widget vocabulary for building `UiTree` values
@@ -411,6 +442,54 @@ v0 ships the minimum the default loop needs (`bool.is_true`, `coll.is_empty`), g
   affordance hint — never an event handler). A new widget is a reviewed in-tree change, same rule
   as any primitive. **There is deliberately no `ui.approval`:** consent surfaces are kernel chrome
   (§7, §10), not data.
+
+### Execution: tasks, not a shell
+
+The industry default — ambient `exec` with an allowlist bolted on — smuggles in four assumptions,
+each optional: that the unit of execution authority is the command line; that the model composes
+the invocation; that the verb set must be open-ended at runtime; and that execution happens in
+the live workspace. Drop all four and the principled shape falls out, homomorphic to the rest of
+the design:
+
+- **Tasks are components.** A task is data: a pinned argv template, a working-directory anchor,
+  an effect class, a network declaration, timeout and output caps — declared by the human, or
+  auto-proposed by project-type detection (here's a Cargo project; here are `build`/`test`
+  candidates) with consent batched at first contact. The authority fold stops seeing an opaque
+  `Exec` blob and starts enumerating *which executions* are reachable. Hash-pinned trust records
+  extend to argv templates: an override's consent card reads "adds the ability to run
+  `cargo fuzz` — approve?"
+- **The model selects; it never composes.** Parameters bind into typed, shape-validated holes
+  (`ident`, `path-seg`, enums, integer ranges — never free strings) as discrete argv elements.
+  Two clauses keep argument injection from reconstituting one argv slot at a time: holes never
+  bind in option position, and `--` separators are pinned in the template where the underlying
+  tool supports them. A leading-dash value is a validation failure, not a flag. Injection's worst
+  case collapses from "run anything" to "choose the wrong pre-approved verb with the wrong
+  pre-shaped argument."
+- **Execution is a transaction.** Tasks default to running against a **persistent, task-scoped
+  scratch** of the workspace (reflink/CoW where the filesystem supports it, copy with skip-lists
+  elsewhere — the cache persists so hermetic stays *fast*; consent fatigue arrives via slowness
+  before it arrives via prompts), with no network unless the task declares it. What settles is a
+  value: `{status, output (capped, untrusted input for trifecta accounting), delta}`. A `check`
+  task (test, lint) promotes **no** delta by construction; a `produce` task promotes only its
+  declared product paths. Promotion to the live workspace flows through kernel chrome, with the
+  diff card as a `UiTree` (§10). "The agent ran the tests" becomes "the agent proposes this
+  workspace delta, here's the evidence."
+- **Escalation needs no new mechanism.** Free-form exec never enters any grantable capability
+  set, so the fold never models it. The two hatches already exist: a frontend `!command` is
+  human-composed and human authority, never the agent's; and the agent can *propose a new task
+  component* ("run the fuzzer for 60 seconds"), which takes the same propose → check → consent →
+  hash-pin path as any override (§7). Compared to allowlists — static, curated by fear — the task
+  catalog grows through reviewed, pinned, diffable consent moments. Rewrite strategy, not
+  confinement, applied to exec itself.
+
+Two honest residues, so this doesn't overclaim. **Self-exec is irreducible**: a coding agent
+edits source and `task.run("test")` executes the code it just wrote; no catalog cleverness
+touches that. The transaction model makes the blast radius *architectural* — no net, scratch
+confinement, output returning as untrusted input — rather than policy-bounded. And
+**interactive/long-running processes** (dev servers, REPLs) don't fit the transaction shape; a
+bounded job/handle story is deliberately punted (§18). Lineage, for the record: object-capability
+designation (authority by naming, no ambient verbs) plus Bazel/Nix hermetic-action discipline,
+applied to an agent.
 
 ## 7. Capability & authority model — and the ground truth
 
@@ -422,7 +501,9 @@ The authority walk traverses the whole tree — through iteration bodies and sta
 dispatch targets — and computes the maximal reachable primitive authority. It rejects a component
 whose reachable primitives exceed the granted set. There is **no runtime policy language**:
 authority is which primitives/components are reachable, and that is decidable by tree-walk plus
-the registered tool table. Project-local overrides that add reachable capabilities or risk
+the registered tool *and task* tables. `task.run` is `dispatch`'s twin: the verb resolves against
+statically-known task components, so the fold enumerates which executions are reachable — never
+an opaque Exec blob — and hash-pinned trust extends to argv templates. Project-local overrides that add reachable capabilities or risk
 warnings are rejected fail-closed unless an exact hash-pinned user-level trust record matches.
 Policy modes: `review` trust-gates authority/risk increases; `strict` rejects newly introduced
 lethal-trifecta paths outright.
@@ -453,6 +534,9 @@ Invariants:
   policy status are kernel-rendered chrome drawn from kernel-owned data; component-emitted UI can
   neither produce, occlude, nor restyle it (§10). A spoofed approval dialog is the UI-layer analog
   of a sandbox escape, and it is designed out the same way: the constructor does not exist.
+- **No ambient execution.** There is no shell and no free-form exec capability anywhere in the
+  lattice (§6). Execution is `task.run` over consent-pinned task components; live-workspace runs
+  are per-invocation kernel chrome; a frontend `!command` is human-composed, human authority.
 
 ### Sandbox specifics — native syscalls, zero dependencies
 
@@ -463,7 +547,7 @@ code at all**:
   its descendants. The long-running kernel legitimately needs broad access (model network,
   terminal, project reads), so it cannot self-restrict. Each effect that touches the world is
   delegated to a short-lived child. Delivery is **self-re-exec with a hidden subcommand** (one
-  artifact, one trust root); `proc.exec` applies the policy in the forked child before `execve`.
+  artifact, one trust root); `task.run` applies the policy in the forked child before `execve`.
 - **Landlock:** ruleset built at ABI **V1** for fs and **V4** for net, derived from the granted
   base anchors; a read-exec set for toolchain/system dirs (`/usr`, `/lib`, `/lib64`, `/bin`,
   `/sbin`, `/etc`, existing entries only); essential devices (`/dev/null`, …); everything else
@@ -667,7 +751,8 @@ The ledger from §1, made operational:
   tests; MSan or Valgrind where practical.
 - **Permanent fuzzing:** libFuzzer targets on every untrusted-input decoder — the loader pipe
   protocol, the JSONC→IR decode (run inside *and* outside the child in fuzz builds), the SSE/
-  tool-call accumulator, `json.coerce`. Corpus checked in; CI smoke-fuzzes per commit.
+  tool-call accumulator, `json.coerce`, and the task parameter-hole validators. Corpus checked
+  in; CI smoke-fuzzes per commit.
 - **Architectural distrust:** the confined loader child (§7) — the grammar-shaped parsing attack
   surface never runs in the kernel's address space.
 - **Trajectory:** C++26 contracts (`pre`/`post` on the primitive boundary: argv non-empty, paths
@@ -689,7 +774,10 @@ The ledger from §1, made operational:
   confinement, TCP, UDP; real dev tools still run under the exec policy; Linux-gated);
   **loader-child tests** (hostile JSONC → confined failure, pipe-protocol fuzz); **SSE/stream
   tests** (fragment accumulation over recorded captures); **view tests** (golden `UiTree`
-  snapshots for every default view; render smoke through both frontend interpreters); and
+  snapshots for every default view; render smoke through both frontend interpreters); **task
+  tests** (hole-shape validation against an argument-injection corpus — leading-dash values,
+  option-position holes rejected, pinned `--` separators; transaction enforcement: `check` tasks
+  promote nothing, `produce` tasks promote only declared product paths); and
   eventually the **golden suite**
   asserting every default component produces its expected effect trace — the living proof of the
   thesis.
@@ -707,9 +795,9 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
 | M4 | LLM client: curl SSE + tool-call accumulation | streaming sharp edge handled |
 | M5 | Runtime: effect prims, registry, events, turn execution | the wiring |
 | M6 | **Loop-as-data**: embedded `turn.json` (consteval-checked) + readline frontend, live end-to-end | **the central bet** |
-| M7 | fs/search/exec primitives + tool components under the sandbox | a useful agent |
+| M7 | fs/search primitives + **tasks & transactions** (`task.run`; there is no shell) | a useful agent with enumerable execution |
 | M8 | UI-as-data (`UiTree`, `ui.*`, `view` kind) + FTXUI TUI as tree interpreter | the view layer is data too |
-| M9 | Trust & self-modification: `component.check`/`catalog`, override diffs, trust records, custom-view acceptance | the authority story complete; agents design their own UI |
+| M9 | Trust & self-modification: `component.check`/`catalog`, override diffs, trust records, custom-view + task-proposal acceptance | the authority story complete; agents design their own UI and verbs |
 | M10 | Polish: config, sessions/resume, packaging | |
 | P2 | MCP client, native non-OpenAI providers | **[PHASE 2]** |
 
@@ -733,3 +821,6 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
     compile-time-parsed bytes. Lean: literals.
 11. **v0 widget vocabulary:** the exact `ui.*` constructor set to ship at M8 (start with ~ten
     semantic widgets; additions are reviewed in-tree changes, same rule as primitives).
+12. **Bounded job handles** for interactive and long-running processes (dev servers, REPLs,
+    debuggers) — the transaction shape doesn't fit them; deliberately punted past v0. Until then
+    they live behind the human-authority `!command` hatch.
