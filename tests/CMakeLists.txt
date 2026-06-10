@@ -10,7 +10,8 @@ add_executable(astrite_tests
     client_test.cpp
     runtime_test.cpp
     transcript_test.cpp
+    sandbox_test.cpp
 )
-target_link_libraries(astrite_tests PRIVATE doctest astrite_core astrite_llm astrite_runtime)
+target_link_libraries(astrite_tests PRIVATE doctest astrite_core astrite_llm astrite_runtime astrite_sandbox)
 target_include_directories(astrite_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME astrite_tests COMMAND astrite_tests)

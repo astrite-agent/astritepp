@@ -42,6 +42,13 @@ set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/ftxui SYSTEM EXCLUDE_FROM_ALL)
 
+# The enforcement floor: zero third-party deps, the only place with raw syscalls.
+add_library(astrite_sandbox STATIC
+    src/sandbox/sandbox.cpp
+)
+target_include_directories(astrite_sandbox PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(astrite_sandbox PUBLIC astrite_flags)
+
 add_library(astrite_core STATIC
     src/schema/load.cpp
     src/kernel/eval.cpp

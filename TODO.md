@@ -54,19 +54,29 @@ The hygiene story must be real before any feature code exists.
 
 ## M1 — Sandbox floor (`src/sandbox/`) — zero deps, native syscalls
 
-- [ ] `no_new_privs` via `prctl(PR_SET_NO_NEW_PRIVS)`.
-- [ ] seccomp filter as **`constexpr std::array<sock_filter, N>`**: deny `AF_INET`/`AF_INET6`
-      socket creation, default action `EPERM`; static_assert program length/jump validity.
-- [ ] Landlock ruleset (fs ABI V1, net ABI V4 deny-all): granted base anchors + read-exec system
-      dirs (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/etc`, existing only) + essential devices.
-- [ ] Self-re-exec child delivery: hidden subcommand in the binary, one artifact, one trust root;
-      apply ratchet (`no_new_privs → seccomp → Landlock`) before the op.
-- [ ] Child env hygiene: `clearenv()` + minimal envp + clean HOME (the API key never reaches a
-      child).
-- [ ] Fork+pre-exec path for `task.run` children (policy applied between fork and execve).
-- [ ] **Enforcement tests (Linux-gated):** read/write/list confined to base; TCP connect denied;
-      UDP/raw denied via seccomp; real dev tools (`git log`) still run under the exec policy.
-- [ ] Fail-closed: missing Landlock ABI / off-Linux ⇒ structured deny, never silent degrade.
+*Enforcement core done 2026-06-10: `apply()` ratchet + filters + Linux-gated enforcement tests,
+all proven by forked syscall probes. Delivery mechanisms (self-re-exec, fork+exec) are wired by
+their consumers — M3 confined loader, M7 fs/task — and check off there.*
+
+- [x] `no_new_privs` via `prctl(PR_SET_NO_NEW_PRIVS)` (first rung of the ratchet).
+- [x] seccomp filter as **`constexpr std::array<sock_filter, 10>`**: arch-guarded, denies
+      `AF_INET`/`AF_INET6` socket creation with `EPERM`, default-allow (DESIGN §7 v0); explicit
+      jump-offset layout + `static_assert`. (Full default-deny allowlist still the eventual goal.)
+- [x] Landlock ruleset with **best-effort ABI clamp** (queries version, masks fs/net rights to
+      what the kernel + headers support — newer flags `#ifdef`-guarded since headers can lag the
+      kernel): per-base path rules (read = read/list/exec; write adds create/write/remove),
+      net deny-all by handling net + adding no net rules. `system_read_exec_paths()` grants the
+      existing toolchain dirs.
+- [ ] Self-re-exec child delivery: hidden subcommand, one artifact, one trust root. **→ M3/M7**
+      (the confined loader and fs helpers own this; `run_confined` fork helper exists now).
+- [ ] Child env hygiene: `clearenv()` + minimal envp + clean HOME. **→ M7** (fork+exec path).
+- [ ] Fork+pre-exec path for `task.run` children. **→ M7.**
+- [x] **Enforcement tests (Linux-gated):** read/write confined to base; `AF_INET`/`AF_INET6`
+      denied; `AF_UNIX` still allowed; a real dynamically-linked tool (`true`) execs under the
+      policy; unopenable base skipped (fail-closed), ungranted path denied.
+- [x] Fail-closed: missing Landlock ABI ⇒ `apply()` returns false ⇒ child exits 126, body never
+      runs. (Off-Linux: the whole layer is `#ifdef __linux__`; structured off-Linux deny is M7
+      when a frontend actually invokes it.)
 
 ## M2 — Schema + kernel (`src/schema/`, `src/kernel/`) — stdlib only
 
