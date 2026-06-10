@@ -1,0 +1,6 @@
+# Vendored third-party source. Every entry is pinned; updating one is a reviewed diff.
+# No package manager, no FetchContent, no network at configure/build time.
+
+rapidyaml  v0.15.2   https://github.com/biojppm/rapidyaml/releases/download/v0.15.2/rapidyaml-0.15.2.hpp  (amalgamated single header)
+doctest    v2.5.2    https://raw.githubusercontent.com/doctest/doctest/v2.5.2/doctest/doctest.h            (single header, dev-only)
+glaze      v7.8.0    https://github.com/stephenberry/glaze @ 13adf5d075529c7e15b77963d54eccd9315fa5e1      (include/glaze header tree)
