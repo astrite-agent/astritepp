@@ -8,6 +8,7 @@
 
 #include "kernel/error.hpp"
 #include "kernel/primitive.hpp"
+#include "kernel/trust.hpp"
 #include "schema/value.hpp"
 
 namespace astrite::kernel {
@@ -31,6 +32,14 @@ namespace astrite::kernel {
     });
     reg.add("obj.build", [](const Value& args) -> std::expected<Value, KernelError> {
         return args; // the resolved with-map IS the built object
+    });
+    // Trust-boundary pair (pure, zero-cap): untrusted input -> typed/confined or
+    // structured failure. Never error the walk — components branch on {ok}.
+    reg.add("path.resolve", [](const Value& args) -> std::expected<Value, KernelError> {
+        return resolve_path(args);
+    });
+    reg.add("json.coerce", [](const Value& args) -> std::expected<Value, KernelError> {
+        return coerce_json(args);
     });
     return reg;
 }
