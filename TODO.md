@@ -80,21 +80,21 @@ The hygiene story must be real before any feature code exists.
       conversion.
 - [x] `Blackboard`: slot store + pure `{ref}` resolution (field access, literal indices, explicit
       default only when unresolvable; missing/mismatch → `KernelError`, never silent null).
-- [ ] `walk(node, bb, ctx) -> std::expected<Status, KernelError>`: `std::visit`, no catch-all
+- [x] `walk(node, bb, ctx) -> std::expected<Status, KernelError>`: `std::visit`, no catch-all
       (compile-time exhaustive); strict boolean guards (non-bool predicate result = error);
       `foreach` scoped binding (save → bind → restore) + 1024-item cap; `repeat {until, max}`.
-- [ ] Primitive `Registry` + `Context { primitives, components, observer }`; pure prims
+- [x] Primitive `Registry` + `Context { primitives, components, observer }`; pure prims
       (`bool.is_true`, `coll.is_empty`, `obj.build`).
-- [ ] `dispatch` builtin: tool-call name → registered component, fresh scope, walk, return
+- [x] `dispatch` builtin: tool-call name → registered component, fresh scope, walk, return
       `{tool_call_id, content}`; unknown tool / bad args / tool failure → error-as-content
       (recoverable); corrupt envelope → walk error.
-- [ ] **Authority fold + trace**: maximal reachable primitive authority by tree-walk (through
+- [x] **Authority fold + trace**: maximal reachable primitive authority by tree-walk (through
       `foreach`/`repeat` bodies and the dispatch table); reject reachable ⊃ granted; effect
-      categories + risk tags; `dispatch` as a routing cap distinct from effect caps.
+      categories + risk tags still pending; `dispatch` is a routing cap distinct from effect caps.
 - [ ] Make the fold **constexpr-callable** (no allocation surprises) — consumed by M6 codegen.
 - [x] Adversarial decode tests (wrong shapes, double discriminators, unknown keys, hostile
       input, comments-don't-relax-strictness).
-- [ ] Kernel walk tests with fake primitives + authority tests.
+- [x] Kernel walk tests with fake primitives + authority tests.
 - [ ] Fuzz target: JSONC → typed-IR decode.
 
 ## M3 — Confined loader (`src/loader/`) — the C++-specific piece
