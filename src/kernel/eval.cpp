@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "kernel/authority.hpp"
 #include "schema/value_json.hpp"
 #include "util/overloaded.hpp"
 
@@ -51,7 +52,17 @@ std::expected<Value, KernelError> dispatch(const Value& args, const Context& ctx
         content = "error: unknown tool `" + *name + "`";
     } else {
         const schema::Component& component = component_it->second;
-        // TODO(M2e): check_component_authority(component, ctx) before walking.
+        if (auto authority = check_component_authority(component, *ctx.primitives);
+            !authority.has_value()) {
+            content = "error: " + authority.error().message;
+            if (ctx.observer != nullptr) {
+                ctx.observer->tool_finished(id, *name, content);
+            }
+            Value rejected = Value::object();
+            rejected.set("tool_call_id", Value::str(id));
+            rejected.set("content", Value::str(std::move(content)));
+            return rejected;
+        }
         auto input = schema::parse_json(arguments);
         Blackboard child;
         child.bind("input", input.has_value() ? std::move(*input) : Value::object());

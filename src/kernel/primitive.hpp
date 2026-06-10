@@ -17,21 +17,45 @@ namespace astrite::kernel {
 enum class Status : std::uint8_t { success, failure };
 
 // The closed primitive catalog at runtime. Effects are registered as closures by
-// the runtime (capturing their confined context); the kernel only ever sees
-// args-object → result-or-error.
+// the runtime (capturing their confined context) and carry the capability id a
+// component must declare to reach them; pure primitives carry none. The kernel
+// only ever sees args-object → result-or-error.
 class Registry {
 public:
     using Fn = std::function<std::expected<schema::Value, KernelError>(const schema::Value& args)>;
 
-    void add(std::string name, Fn fn) { prims_.insert_or_assign(std::move(name), std::move(fn)); }
+    // A pure primitive: no capability required.
+    void add(std::string name, Fn fn) {
+        prims_.insert_or_assign(std::move(name), Entry{std::move(fn), std::nullopt});
+    }
+
+    // An effect primitive: reachable only by components granting `cap`.
+    void add_effect(std::string name, std::string cap, Fn fn) {
+        prims_.insert_or_assign(std::move(name), Entry{std::move(fn), std::move(cap)});
+    }
 
     [[nodiscard]] const Fn* find(std::string_view name) const {
         auto it = prims_.find(name);
-        return it == prims_.end() ? nullptr : &it->second;
+        return it == prims_.end() ? nullptr : &it->second.fn;
+    }
+
+    [[nodiscard]] bool has(std::string_view name) const { return prims_.contains(name); }
+
+    // The capability an effect requires; nullptr for pure or unknown primitives.
+    [[nodiscard]] const std::string* cap_of(std::string_view name) const {
+        auto it = prims_.find(name);
+        if (it == prims_.end() || !it->second.cap.has_value()) {
+            return nullptr;
+        }
+        return &*it->second.cap;
     }
 
 private:
-    std::map<std::string, Fn, std::less<>> prims_;
+    struct Entry {
+        Fn fn;
+        std::optional<std::string> cap;
+    };
+    std::map<std::string, Entry, std::less<>> prims_;
 };
 
 // Optional evaluator observer used by frontends/runtimes for progress events.
