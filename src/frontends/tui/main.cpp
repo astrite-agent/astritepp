@@ -34,6 +34,7 @@
 #include "frontends/tui/markdown_render.hpp"
 #include "frontends/tui/transcript.hpp"
 #include "frontends/tui/view_state.hpp"
+#include "frontends/tui/widgets.hpp"
 #include "runtime/runtime.hpp"
 #include "sandbox/sandbox.hpp"
 
@@ -114,21 +115,6 @@ Element render_segment(const Segment& s, int idx, bool selected, bool collapsed,
         row = hbox({gutter, row | flex});
     }
     return row;
-}
-
-// A scrollable modal panel (dimmed background underneath, centered box on top).
-Element modal_overlay(Element base, const std::string& title, Element content, float scroll,
-                      const std::string& footer) {
-    Element panel =
-        vbox({
-            text(" " + title + " ") | bold | color(Color::White) | bgcolor(Color::Blue),
-            separator(),
-            content | focusPositionRelative(0.0f, scroll) | yframe | flex,
-            separator(),
-            text(footer) | dim | hcenter,
-        }) |
-        border | bgcolor(Color::Black) | size(WIDTH, LESS_THAN, 92) | size(HEIGHT, LESS_THAN, 32);
-    return dbox({base | dim, panel | center});
 }
 
 Element config_modal_content(const std::string& model, const std::string& base_url,
@@ -509,7 +495,7 @@ int main(int argc, char** argv) {
                 break;
             }
             const bool is_config = view_state.modal() == at::Modal::config;
-            root_el = modal_overlay(root_el, title, content, modal_scroll,
+            root_el = at::modal_overlay(root_el, title, content, modal_scroll,
                                     is_config ? "↑/↓ select · enter toggle · esc close"
                                               : "↑/↓ j/k pgup/pgdn ctrl-u/ctrl-d scroll · esc close");
         }
