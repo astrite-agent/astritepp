@@ -100,5 +100,9 @@ add_executable(astrite-tui src/frontends/tui/main.cpp)
 target_include_directories(astrite-tui PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(astrite-tui PRIVATE astrite_runtime ftxui::component)
 
+# Standalone provider REPL — exercises the LLM backends with no kernel/sandbox.
+add_executable(astrite-llm src/frontends/llm_repl/main.cpp)
+target_link_libraries(astrite-llm PRIVATE astrite_llm)
+
 enable_testing()
 add_subdirectory(tests)
