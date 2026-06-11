@@ -78,10 +78,14 @@ struct Choice {
     std::optional<std::string> finish_reason;
     std::optional<std::int64_t> index;
 };
+struct PromptTokensDetails {
+    std::optional<int> cached_tokens; // OpenAI automatic prompt caching
+};
 struct UsageWire {
     std::optional<int> prompt_tokens;
     std::optional<int> completion_tokens;
     std::optional<int> total_tokens;
+    std::optional<PromptTokensDetails> prompt_tokens_details;
 };
 struct Chunk {
     std::optional<std::vector<Choice>> choices;
@@ -155,6 +159,10 @@ private:
             usage_.prompt_tokens = u.prompt_tokens.value_or(usage_.prompt_tokens);
             usage_.completion_tokens = u.completion_tokens.value_or(usage_.completion_tokens);
             usage_.total_tokens = u.total_tokens.value_or(usage_.total_tokens);
+            if (u.prompt_tokens_details.has_value()) {
+                usage_.cache_read_tokens =
+                    u.prompt_tokens_details->cached_tokens.value_or(usage_.cache_read_tokens);
+            }
             usage_.present = true;
         }
         if (!chunk.choices.has_value()) {
