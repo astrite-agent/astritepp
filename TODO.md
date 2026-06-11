@@ -341,23 +341,42 @@ argv holes are the remaining M7 work; see the deferred items below.*
 
 ## M9 — Trust & self-modification
 
-- [ ] `component.check`: parse/schema/authority/risk report for a local component file; baseline
-      comparison (added caps, risk warnings, untrusted input/sink flow, SHA-256 identity, exact
-      approval-record candidate).
-- [ ] `component.catalog`: live component inventory with source/trust metadata, hashes, declared/
-      reached authority, baseline diffs for overrides, policy status, callable tool names.
-- [ ] Hash-pinned user-level trust records + runtime append API; startup trust prompts for exact
-      override authority/risk deltas.
-- [ ] Policy modes: `review` (trust-gate increases) / `strict` (reject new lethal-trifecta paths
-      outright) via `ASTRITE_AUTHORITY_POLICY`.
-- [ ] Propose/accept flow: model-proposed components are inert until re-checked + consented
-      (same path as any disk override).
-- [ ] Custom/agent-proposed `view` components through the same override → check → trust path;
+*The self-modification loop is built end to end: a model inspects its affordances,
+authors and proposes a component, and a human approves it — the kernel installs it
+and hash-pins a trust record. The model can never write the control plane itself
+(`.astrite/` is reserved). "Rewrite strategy, not confinement," made real.*
+
+- [x] **Control-plane reservation**: `.astrite/` (components, sessions, trust records) is
+      read-only to every model-driven write — `fs.write`/`fs.edit` (belt `confine_write` +
+      sandbox in-child re-check) and task `writable` (Landlock never granted over it). One pure
+      helper (`util/control_plane.hpp`).
+- [x] `component.check` (zero-cap builtin): parse + authority-fold a candidate, report
+      `{ok, name, kind, caps, reached, risk}` or `{ok:false, errors}` — without installing it.
+      (Baseline/SHA diff in the report still TODO; the pin itself exists below.)
+- [x] `component.catalog` (zero-cap builtin): live inventory — every loaded component's name,
+      kind, caps, description. (Source/trust metadata in the listing still TODO.)
+- [x] **SHA-256** (dependency-free, `util/sha256.hpp`) + **hash-pinned trust records**
+      (`.astrite/trust/<name>.json`) + the **load-time gate**: each disk component (override or
+      repo-local) is `trusted` / `new` / `changed` vs its record. Policy `ASTRITE_TRUST_POLICY`:
+      `warn` (default, loads + notes) / `strict` (refuses unapproved; overrides fall back to the
+      embedded baseline).
+- [x] **Propose → accept flow**: `component.propose` (cap-gated effect) validates + stages a
+      candidate under `.astrite/proposals/` and emits `ComponentProposed` (rendered as kernel
+      chrome). `Runtime::accept_proposal` re-validates, writes the component + trust record
+      (kernel-owned), installs it live, clears staging; `reject_proposal` discards. Human surface:
+      readline `/proposals` `/approve` `/reject`. Proposing grants nothing; acceptance is the gate.
+- [ ] `component.check`/`catalog` enriched with baseline diffs (added caps, risk deltas vs the
+      trusted baseline) + source/trust metadata in the listing.
+- [ ] Policy modes beyond warn/strict: `review` (trust-gate increases) via `ASTRITE_AUTHORITY_POLICY`;
+      lethal-trifecta-aware refusal.
+- [ ] TUI root-owned consent modal (approve/reject with the diff) — task #42. Proposal card already
+      renders; readline surface already exists.
+- [ ] Custom/agent-proposed `view` components through the same propose → check → consent path;
       `caps: []` means the authority diff is empty by construction, so review is
       presentation-only. *The payoff: agents design their own UI elements.*
-- [ ] Agent-proposed `task` components through the same path ("run the fuzzer for 60 seconds"):
-      consent card shows exact argv template, scope, effect class, net; hash-pinned on approval.
-      *The payoff: agents grow their own verb set — reviewably.*
+- [x] Agent-proposed `task` components flow through the same path — a task's pinned argv is part of
+      the candidate the consent card's caps/risk summarize. (The argv-template-specific consent
+      card detail — showing the exact argv/scope/net — is UI polish still TODO.)
 
 ## M10 — Polish
 

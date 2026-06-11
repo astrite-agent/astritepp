@@ -34,10 +34,14 @@ exactly what exists today.** In milestone terms (see §17): M0 partial (toolchai
 done; CI + release hardening pending), M1 sandbox floor done, M2 kernel done, M4 LLM client done,
 M5 runtime done, M6 loop-as-data done (constexpr-IR codegen pending), M7 fs tools + the
 **check-only `task.run`** done (transactions/scratch/promotion, typed argv holes, and
-`fs.delete/mkdir/rename` pending). Ahead: M3 confined loader (disk overrides + repo-local
-components load in-process and un-gated today), M8 UiTree-as-data (a rich FTXUI TUI scaffold
-exists), M9 trust/self-modification. Sections describing unbuilt work are marked **[planned]** /
-**[PHASE 2]**.
+`fs.delete/mkdir/rename` pending). **M9 self-modification is built end to end**: the control
+plane (`.astrite/`) is reserved from model writes, `component.check`/`catalog` inspect, SHA-256
+hash-pinned trust records gate disk components at load, and the propose → accept flow
+(`component.propose` → human `accept_proposal`) lets a model grow its own verbs/components only
+with reviewed consent. Ahead: M3 confined loader (the loader still runs in-process — a parser bug
+is a host crash, not a confined one), M8 UiTree-as-data (a rich FTXUI TUI scaffold exists; the
+root-owned consent modal is pending), and the rest of M9 (baseline diffs in the check report,
+richer policy modes). Sections describing unbuilt work are marked **[planned]** / **[PHASE 2]**.
 
 ## 1. Why C++?
 
@@ -431,7 +435,8 @@ component's granted capability set, and **executes inside a sandbox child (§7 g
 | `clock.now` / `rand.bytes` | ReadOnly | **later**; the *only* time/entropy sources; seedable for replayable runs |
 | `secret.get` | ReadOnly | **later**; resolves to a redacting `Secret` value no serializing sink accepts |
 | `ctx.get` | ReadOnly | runtime-owned execution facts: workspace root, override dir, session log, scratch dir, model, doctrine |
-| `component.check` / `component.catalog` | — | **later**; validation, authority/risk traces, capability diffs, trust-record candidates, live component inventory |
+| `component.check` / `component.catalog` | — | zero-cap inspection builtins. **Built:** `check` parses + authority-folds a candidate and reports `{ok, name, kind, caps, reached, risk}`; `catalog` lists the live affordance set. **Planned:** baseline/SHA diffs and trust metadata in the reports |
+| `component.propose` | ComponentPropose | **Built:** the model's only authoring path — validates + authority-folds a candidate, stages it under `.astrite/proposals/` (kernel-owned), emits a `ComponentProposed` event. Grants nothing; a human `accept` installs it and pins a SHA-256 trust record |
 | `path.resolve` | — | turn an untrusted path string + a base anchor into a confined path reference, or structured failure, without touching the filesystem |
 | `json.coerce` | — | validate and conservatively coerce untrusted JSON into a declared shape, returning structured failure without crashing |
 
@@ -611,6 +616,22 @@ An override is schema-checked, name-checked, authority-checked, reported with ca
 risk-warning diffs, and rejected if it adds reachable authority or risk warnings without an exact
 hash-pinned user-level trust record.
 
+> **Status — the trust boundary and self-modification loop are built (the confined *loader*
+> child is not yet).** The `.astrite/` control plane (components, session log, trust records) is
+> **reserved from every model-driven write** — `fs.write`/`fs.edit` reject it (belt + an
+> independent in-child re-check), and a task's writable set can never cover it (Landlock is simply
+> never granted there). So a model can read its own components but cannot rewrite them, forge the
+> append-only transcript, or tamper with trust records. At load, each disk component is matched
+> against a SHA-256 **trust record** (`.astrite/trust/`): `trusted` / `new` / `changed`. Policy
+> `ASTRITE_TRUST_POLICY=strict` refuses anything unapproved (overrides fall back to the embedded
+> baseline); `warn` (default) loads with a notice. The authoring loop is
+> `component.check` (self-validate) → `component.propose` (kernel stages it, model never touches
+> the control plane) → human `accept` (kernel writes the component + pins a trust record, installs
+> it live). Verified end to end with a live model: it self-checked, proposed, was approved,
+> loaded under `strict`, and a byte-tampered copy was refused. **Still pending:** the loader still
+> parses in-process — a parser bug is a host crash, not a confined one (M3 confined-loader child);
+> and the check/catalog reports don't yet include baseline diffs.
+
 ## 8. The kernel — evaluator, concurrency, streaming
 
 - **Evaluator:** `walk(node, bb, ctx) -> std::expected<Status, KernelError>` — plain recursion,
@@ -714,14 +735,20 @@ Concrete frontends:
 ## 11. Config, sessions, components on disk
 
 - **Config:** env vars first (`OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL`,
-  `ASTRITE_AUTHORITY_POLICY`); TOML at the platform config dir + per-project `.astrite/` later.
+  `ASTRITE_TRUST_POLICY=warn|strict` — the load-time trust gate; `ASTRITE_AUTHORITY_POLICY` later);
+  TOML at the platform config dir + per-project `.astrite/` later.
 - **Components:** the default agent ships as embedded built-in components (generated constexpr IR);
   users override them under `.astrite/components/<name>.json` (disk override preferred — this is
   what makes the loop hot-swappable). A file there whose name is *not* an embedded default is
   loaded as a **new** component (repo-local task verbs today, e.g. `build`/`test`). Overrides and
-  new components go through the confined loader + authority fold + trust gate. *Built today:* they
-  load in-process and un-gated, fail-closed on parse/name-mismatch, and announce themselves on
-  stderr ("trust gate arrives at M9"); the confined loader (M3) and trust gate (M9) are pending.
+  new components go through the authority fold + the trust gate (§7): each is matched against a
+  SHA-256 trust record and, under `strict`, refused unless approved (an override falls back to the
+  embedded baseline). The model itself can never write here — `.astrite/` is reserved; new
+  components arrive via the `component.propose` → human-accept flow, which is what writes the file
+  and pins the record. *Still pending:* the loader parses **in-process** (a parser bug is a host
+  crash, not a confined one — M3 confined-loader child).
+- **Proposals & trust:** `.astrite/proposals/` holds staged candidates awaiting review;
+  `.astrite/trust/<name>.json` holds the hash-pinned approvals. Both are kernel-written only.
 - **Sessions:** append-only JSONL at `.astrite/sessions/current.jsonl` — the event-sourced
   transcript the `turn` component reads and appends to. Line-indexed reader and `tail`/`range`
   facade for transcript windows; per-id sessions and resume later.
@@ -848,7 +875,7 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
 | M6 | **Loop-as-data**: embedded `turn.json` (consteval-checked) + readline frontend, live end-to-end | **the central bet** |
 | M7 | fs/search primitives ✓ + **check-only `task.run`** ✓ (declared verbs, confined, structured results; there is no shell) — transactions/holes/`produce` + `fs.delete/mkdir/rename` pending | a useful agent with enumerable execution |
 | M8 | UI-as-data (`UiTree`, `ui.*`, `view` kind) + FTXUI TUI as tree interpreter | the view layer is data too |
-| M9 | Trust & self-modification: `component.check`/`catalog`, override diffs, trust records, custom-view + task-proposal acceptance | the authority story complete; agents design their own UI and verbs |
+| M9 | Trust & self-modification ✓ (built end to end): control-plane reservation, `component.check`/`catalog`, SHA-256 trust records + load gate, `component.propose` → human accept (kernel installs + pins). Override/check baseline diffs + TUI consent modal pending | the authority story; agents grow their own verbs, reviewably |
 | M10 | Polish: config, sessions/resume, packaging | |
 | P2 | MCP client, native non-OpenAI providers | **[PHASE 2]** |
 
