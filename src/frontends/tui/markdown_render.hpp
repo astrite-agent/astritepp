@@ -36,6 +36,13 @@ inline void emit_words(ftxui::Elements& out, const md::Inline& span) {
         }
         return e;
     };
+    // Links become real OSC-8 terminal hyperlinks (clickable in supporting
+    // terminals, plain text elsewhere) rather than just styled text.
+    if (span.kind == md::Span::link && !span.url.empty()) {
+        out.push_back(ftxui::hyperlink(span.url, ftxui::text(span.text)) | ftxui::underlined |
+                      ftxui::color(ftxui::Color::BlueLight));
+        return;
+    }
     const std::string& s = span.text;
     std::size_t i = 0;
     while (i < s.size()) {
