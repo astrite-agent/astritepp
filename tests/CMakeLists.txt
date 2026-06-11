@@ -10,6 +10,7 @@ add_executable(astrite_tests
     openai_compat_test.cpp
     dotenv_test.cpp
     anthropic_test.cpp
+    gpt_test.cpp
     runtime_test.cpp
     transcript_test.cpp
     sandbox_test.cpp

@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "llm/anthropic.hpp"
+#include "llm/gpt.hpp"
 #include "llm/openai_compat.hpp"
 
 namespace astrite::llm {
@@ -37,8 +38,14 @@ std::expected<std::shared_ptr<Provider>, std::string> make_provider_from_env() {
         }
         return std::make_shared<AnthropicProvider>(std::move(*cfg));
     }
-    // `gpt` (OpenAI-native Responses API) is wired in when that provider lands.
-    return std::unexpected("provider `" + kind + "` is not available yet");
+    if (kind == "gpt" || kind == "codex" || kind == "responses") {
+        auto cfg = GptConfig::from_env();
+        if (!cfg.has_value()) {
+            return std::unexpected(cfg.error());
+        }
+        return std::make_shared<GptProvider>(std::move(*cfg));
+    }
+    return std::unexpected("unknown ASTRITE_PROVIDER `" + kind + "`");
 }
 
 } // namespace astrite::llm
