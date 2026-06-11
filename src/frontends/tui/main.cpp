@@ -117,34 +117,36 @@ Element render_segment(const Segment& s, int idx, bool selected, bool collapsed,
     return row;
 }
 
-Element config_modal_content(const std::string& model, const std::string& base_url,
-                             const std::string& workspace, const std::string& policy,
-                             const std::string& session, bool pref_markdown, bool pref_index,
-                             int sel) {
+// The /config panel element, framing the (interactive) checkbox `fields` with
+// read-only runtime info. Returned without center/clear_under — the FTXUI Modal
+// component adds those. The checkboxes themselves are real components (mouse +
+// keyboard), built in main() and bound to the preference bools.
+Element config_panel(const std::string& model, const std::string& base_url,
+                     const std::string& workspace, const std::string& policy,
+                     const std::string& session, Element fields) {
     auto info = [](std::string k, std::string v) {
-        return hbox({text(k) | dim | size(WIDTH, EQUAL, 14), text(std::move(v))});
-    };
-    auto toggle = [&](int idx, std::string label, bool on) {
-        Element r = hbox({text(on ? "[x] " : "[ ] ") | color(on ? Color::GreenLight : Color::GrayDark),
-                          text(std::move(label))});
-        return idx == sel ? r | inverted : r;
+        return hbox({text(std::move(k)) | color(Color::GrayLight) | size(WIDTH, EQUAL, 14),
+                     text(std::move(v))});
     };
     return vbox({
-        text("Runtime") | bold | color(Color::YellowLight),
-        info("model", model),
-        info("base url", base_url),
-        info("workspace", workspace),
-        info("authority", policy),
-        info("session", session),
-        text(""),
-        text("Preferences  (↑/↓ select · enter toggle)") | bold | color(Color::YellowLight),
-        toggle(0, "Render markdown", pref_markdown),
-        toggle(1, "Always show segment indices", pref_index),
-        text(""),
-        paragraph("Persistent, file-backed config (a profile component) is planned for M10; "
-                  "these toggles apply to the current session.") |
-            dim,
-    });
+               text(" config ") | bold | color(Color::White) | bgcolor(Color::Blue),
+               separator(),
+               text("Runtime") | bold | color(Color::YellowLight),
+               info("model", model),
+               info("base url", base_url),
+               info("workspace", workspace),
+               info("authority", policy),
+               info("session", session),
+               text(""),
+               text("Preferences  (space toggles · click · esc closes)") | bold |
+                   color(Color::YellowLight),
+               std::move(fields),
+               text(""),
+               paragraph("Persistent, file-backed config (a profile component) is planned for "
+                         "M10; these toggles apply to the current session.") |
+                   dim,
+           }) |
+           border | bgcolor(Color::Black) | size(WIDTH, LESS_THAN, 92) | size(HEIGHT, LESS_THAN, 32);
 }
 
 Element commands_modal_content() {
@@ -306,7 +308,7 @@ int main(int argc, char** argv) {
     bool following = true;
     int popup_sel = 0;
     float modal_scroll = 0.0f;
-    int config_sel = 0;
+    bool config_shown = false; // drives the FTXUI Modal component (focusable checkboxes)
     bool pref_markdown = true;
     bool pref_index = false;
     int cursor_pos = 0;               // shared with the Input widget (readline editing)
@@ -393,8 +395,7 @@ int main(int argc, char** argv) {
             view_state.open_modal(at::Modal::status);
             modal_scroll = 0.0f;
         } else if (n == "/config") {
-            view_state.open_modal(at::Modal::config);
-            config_sel = 0;
+            config_shown = true; // shown via the FTXUI Modal component below
         } else if (n == "/clear") {
             if (!turn_active()) {
                 transcript.clear();
@@ -564,41 +565,24 @@ int main(int argc, char** argv) {
                               &usage.history, context_window});
                 break;
             }
-            case at::Modal::config:
-                title = "config";
-                content = config_modal_content(model, base_url, workspace, policy, session_path,
-                                               pref_markdown, pref_index, config_sel);
-                break;
+            case at::Modal::config: // handled by the FTXUI Modal component, not here
             case at::Modal::none:
                 break;
             }
-            const bool is_config = view_state.modal() == at::Modal::config;
-            root_el = at::modal_overlay(root_el, title, content, modal_scroll,
-                                    is_config ? "↑/↓ select · enter toggle · esc close"
-                                              : "↑/↓ j/k pgup/pgdn ctrl-u/ctrl-d scroll · esc close");
+            if (!title.empty()) {
+                root_el = at::modal_overlay(root_el, title, content, modal_scroll,
+                                            "↑/↓ j/k pgup/pgdn ctrl-u/ctrl-d scroll · esc close");
+            }
+        }
+        if (config_shown) {
+            root_el = root_el | dim; // dim the backdrop under the (clear_under) config modal
         }
         return root_el;
     });
 
-    Component root = CatchEvent(view, [&](Event e) {
-        // Modal open: scroll + close, swallow the rest.
-        // The config modal is an interactive list (select + toggle), not a scroller.
-        if (view_state.modal() == at::Modal::config) {
-            if (e == Event::Escape || e == Event::Character("q")) {
-                view_state.close_modal();
-            } else if (e == Event::ArrowUp || e == Event::Character("k")) {
-                config_sel = std::max(0, config_sel - 1);
-            } else if (e == Event::ArrowDown || e == Event::Character("j")) {
-                config_sel = std::min(1, config_sel + 1);
-            } else if (e == Event::Return || e == Event::Character(" ")) {
-                if (config_sel == 0) {
-                    pref_markdown = !pref_markdown;
-                } else {
-                    pref_index = !pref_index;
-                }
-            }
-            return true;
-        }
+    Component main_view = CatchEvent(view, [&](Event e) {
+        // Modal open: scroll + close, swallow the rest. (/config is a separate FTXUI
+        // Modal component and never reaches this handler while it is shown.)
         if (view_state.modal_open()) {
             const bool half_down = e.input() == "\x04"; // Ctrl-D
             const bool half_up = e.input() == "\x15";   // Ctrl-U
@@ -811,6 +795,25 @@ int main(int argc, char** argv) {
         }
         return false;
     });
+
+    // /config as a real FTXUI Modal: checkboxes bound to the preference bools get
+    // keyboard + mouse for free; Modal routes events to it (and applies
+    // clear_under) while config_shown, and back to main_view otherwise.
+    Component cb_markdown = Checkbox("Render markdown", &pref_markdown);
+    Component cb_index = Checkbox("Always show segment indices", &pref_index);
+    Component config_fields = Container::Vertical({cb_markdown, cb_index});
+    Component config_panel_view = Renderer(config_fields, [&] {
+        return config_panel(model, base_url, workspace, policy, session_path,
+                            config_fields->Render());
+    });
+    Component config_modal = CatchEvent(config_panel_view, [&](Event e) {
+        if (e == Event::Escape || e == Event::Character("q")) {
+            config_shown = false;
+            return true;
+        }
+        return false; // arrows / space / mouse → the checkboxes
+    });
+    Component root = Modal(main_view, config_modal, &config_shown);
 
     screen.Loop(root);
     runtime.events().close();
