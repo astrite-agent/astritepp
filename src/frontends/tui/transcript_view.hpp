@@ -9,13 +9,16 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/component_options.hpp>
 #include <ftxui/component/event.hpp>
+#include <ftxui/component/mouse.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
 
 #include "frontends/tui/segment_render.hpp"
@@ -83,11 +86,13 @@ public:
             container_->DetachAllChildren();
             built_ = 0;
             collapsed_.clear();
+            resolved_.clear();
             selected_ = 0;
         }
         bool grew = false;
         while (built_ < n) {
             collapsed_.push_back(false);
+            resolved_.push_back(0);
             container_->Add(make_segment(built_));
             ++built_;
             grew = true;
@@ -103,18 +108,30 @@ private:
             segs[static_cast<std::size_t>(index)].kind == Segment::Kind::proposal) {
             return make_proposal(index);
         }
-        auto render = [this, index](bool focused) -> Element {
+        auto box = std::make_shared<Box>();
+        auto render = [this, index, box](bool focused) -> Element {
             const auto& s = transcript_.segments();
             if (index >= static_cast<int>(s.size())) {
                 return text("");
             }
-            return render_segment(s[static_cast<std::size_t>(index)], index, focused,
-                                  is_collapsed(index), (show_index_ && *show_index_) || focused,
-                                  markdown_ && *markdown_);
+            Element el = render_segment(s[static_cast<std::size_t>(index)], index, focused,
+                                        is_collapsed(index), (show_index_ && *show_index_) || focused,
+                                        markdown_ && *markdown_);
+            if (focused) {
+                el = el | focus; // FTXUI scrolls the frame to the focused segment
+            }
+            return el | reflect(*box);
         };
         Component leaf = Renderer(render);
-        return CatchEvent(std::move(leaf), [this, index](const Event& e) {
+        return CatchEvent(std::move(leaf), [this, index, box](Event e) {
             if (e == Event::Return) {
+                toggle(index);
+                return true;
+            }
+            // Click toggles collapse (the focusable Renderer already takes focus on
+            // press); a drag that releases elsewhere won't match the box.
+            if (e.is_mouse() && e.mouse().button == Mouse::Left &&
+                e.mouse().motion == Mouse::Released && box->Contain(e.mouse().x, e.mouse().y)) {
                 toggle(index);
                 return true;
             }
@@ -129,13 +146,25 @@ private:
         using namespace ftxui;
         const std::string name = transcript_.segments()[static_cast<std::size_t>(index)].tool_name;
         Component approve = Button(
-            "Approve", [this, name] { if (on_action_) on_action_(name, true); },
+            "Approve",
+            [this, index, name] {
+                resolved_[static_cast<std::size_t>(index)] = 1;
+                if (on_action_) {
+                    on_action_(name, true);
+                }
+            },
             ButtonOption::Ascii());
         Component reject = Button(
-            "Reject", [this, name] { if (on_action_) on_action_(name, false); },
+            "Reject",
+            [this, index, name] {
+                resolved_[static_cast<std::size_t>(index)] = 2;
+                if (on_action_) {
+                    on_action_(name, false);
+                }
+            },
             ButtonOption::Ascii());
         Component buttons = Container::Horizontal({approve, reject});
-        auto render = [this, index, approve, reject]() -> Element {
+        auto render = [this, index, approve, reject, buttons]() -> Element {
             const auto& segs = transcript_.segments();
             if (index >= static_cast<int>(segs.size())) {
                 return text("");
@@ -151,8 +180,19 @@ private:
                 }
             }
             rows.push_back(text(meta));
-            rows.push_back(hbox({approve->Render(), text("  "), reject->Render()}));
-            return vbox(std::move(rows)) | borderDouble | color(Color::Magenta);
+            const int state = resolved_[static_cast<std::size_t>(index)];
+            if (state == 1) {
+                rows.push_back(text("✓ approved") | color(Color::GreenLight));
+            } else if (state == 2) {
+                rows.push_back(text("✗ rejected") | color(Color::GrayLight));
+            } else {
+                rows.push_back(hbox({approve->Render(), text("  "), reject->Render()}));
+            }
+            Element card = vbox(std::move(rows)) | borderDouble | color(Color::Magenta);
+            if (buttons->Focused()) {
+                card = card | focus; // scroll the frame to this card when active
+            }
+            return card;
         };
         return Renderer(buttons, render);
     }
@@ -164,6 +204,7 @@ private:
     int selected_ = 0; // declared before container_: Container::Vertical captures &selected_
     int built_ = 0;
     std::vector<bool> collapsed_;
+    std::vector<int> resolved_; // proposal cards: 0 pending, 1 approved, 2 rejected
     ftxui::Component container_;
 };
 

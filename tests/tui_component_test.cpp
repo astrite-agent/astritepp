@@ -5,6 +5,7 @@
 #include <string>
 
 #include <ftxui/component/event.hpp>
+#include <ftxui/component/mouse.hpp>
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 
@@ -158,11 +159,28 @@ TEST_CASE("transcript view: a proposal card's Approve/Reject buttons fire the ac
     CHECK(name == "wave");
     CHECK(approve == true);
 
-    // ArrowRight moves to Reject; Enter fires it.
-    CHECK(v.component()->OnEvent(Event::ArrowRight));
-    CHECK(v.component()->OnEvent(Event::Return));
-    CHECK(calls == 2);
-    CHECK(approve == false);
+    // After approving, the card shows its resolved state instead of buttons.
+    std::string after = render_to_string(v.component(), 60, 8);
+    CHECK(after.find("approved") != std::string::npos);
+}
+
+TEST_CASE("transcript view: clicking a segment toggles its collapse") {
+    Transcript t;
+    bool md = false, idx = false;
+    TranscriptView v(t, &md, &idx);
+    t.apply(astrite::runtime::ToolStarted{"id", "fs_read", "{}"});
+    t.apply(astrite::runtime::ToolFinished{"id", "fs_read", "a\nb\nc"});
+    v.sync();
+    render_to_string(v.component(), 60, 8); // fills the per-segment boxes (reflect)
+
+    CHECK_FALSE(v.is_collapsed(0));
+    ftxui::Mouse m;
+    m.button = ftxui::Mouse::Left;
+    m.motion = ftxui::Mouse::Released;
+    m.x = 1;
+    m.y = 0;
+    v.component()->OnEvent(Event::Mouse("", m));
+    CHECK(v.is_collapsed(0));
 }
 
 TEST_CASE("transcript view: a proposal segment renders as kernel chrome") {

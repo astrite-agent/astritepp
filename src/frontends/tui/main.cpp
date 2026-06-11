@@ -512,16 +512,15 @@ int main(int argc, char** argv) {
             text(" "),
         });
 
-        // In transcript focus, follow the selected segment; otherwise honor the
-        // manual scroll (wheel / PgUp / End-follow). Mouse drag-to-select is FTXUI
-        // built-in; style the selection so it reads as intentional.
-        const float pos = (transcript_focus && count > 1)
-                              ? static_cast<float>(tv.selected()) / static_cast<float>(count - 1)
-                              : scroll;
+        // In transcript focus, FTXUI scrolls to the focused segment (marked with
+        // `focus`); otherwise honor the manual scroll (wheel / PgUp / End-follow).
+        // Mouse drag-to-select is FTXUI built-in; style the selection intentionally.
         Element transcript_pane = transcript_el | selectionBackgroundColor(Color::Blue) |
-                                  selectionForegroundColor(Color::White) |
-                                  focusPositionRelative(0.0f, pos) | vscroll_indicator | yframe |
-                                  flex;
+                                  selectionForegroundColor(Color::White);
+        transcript_pane = transcript_focus
+                              ? transcript_pane | yframe | vscroll_indicator | flex
+                              : transcript_pane | focusPositionRelative(0.0f, scroll) | yframe |
+                                    vscroll_indicator | flex;
 
         Elements stack{header, separator(), transcript_pane, separator()};
 
@@ -551,10 +550,11 @@ int main(int argc, char** argv) {
             stack.push_back(hbox({text(active ? "~ " : "› ") | bold, input->Render() | flex}));
         }
 
-        std::string hints = rsearch ? " type to search · ctrl-r older · enter accept · esc cancel "
-                            : transcript_focus
-                                ? " ↑/↓ j/k select · enter collapse · tab input · /help "
-                                : " enter send · ↑/↓ history · ctrl-r search · tab transcript · /help ";
+        std::string hints =
+            rsearch ? " type to search · ctrl-r older · enter accept · esc cancel "
+            : transcript_focus
+                ? " ↑/↓ j/k select · enter collapse · ←/→ enter on cards · click · tab input "
+                : " enter send · ↑/↓ history · ctrl-r search · tab transcript · /help ";
         stack.push_back(hbox({text(hints) | dim, filler(),
                               following ? text("") : text("↓ more (End) ") | color(Color::YellowLight)}));
 
