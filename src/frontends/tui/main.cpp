@@ -502,7 +502,11 @@ int main(int argc, char** argv) {
             text(" "),
         });
 
-        Element body = vbox(std::move(lines)) | focusPositionRelative(0.0f, scroll) |
+        // Mouse drag-to-select is built into FTXUI (handled in the loop after our
+        // CatchEvent passes the event through); style the selection so it reads as
+        // intentional. GetSelection() can later feed a copy affordance.
+        Element body = vbox(std::move(lines)) | selectionBackgroundColor(Color::Blue) |
+                       selectionForegroundColor(Color::White) | focusPositionRelative(0.0f, scroll) |
                        vscroll_indicator | yframe | flex;
 
         Elements stack{header, separator(), body, separator()};
