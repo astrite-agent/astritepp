@@ -69,7 +69,7 @@ std::string clip_lines(const std::string& s, std::size_t max_lines) {
     return s.substr(0, pos) + "… (+" + std::to_string(remaining + 1) + " more lines)";
 }
 
-Element segment_body(const Segment& s, bool collapsed) {
+Element segment_body(const Segment& s, bool collapsed, bool markdown) {
     switch (s.kind) {
     case Segment::Kind::user:
         return hbox({text("› ") | bold, paragraph(s.text)}) | color(Color::CyanLight);
@@ -77,10 +77,12 @@ Element segment_body(const Segment& s, bool collapsed) {
         if (collapsed) {
             return paragraph(first_line(s.text) + " …") | color(Color::GrayLight);
         }
-        // Settled messages render as styled markdown; the streaming partial stays
-        // raw (no half-parsed flicker) with a cursor.
-        return s.done ? astrite::tui::render_markdown(s.text)
-                      : paragraph(s.text + " ▌");
+        // Settled messages render as styled markdown (when enabled); the streaming
+        // partial stays raw (no half-parsed flicker) with a cursor.
+        if (!s.done) {
+            return paragraph(s.text + " ▌");
+        }
+        return markdown ? astrite::tui::render_markdown(s.text) : paragraph(s.text);
     case Segment::Kind::tool: {
         std::string head = std::string(collapsed ? "▸ " : "▾ ") + "⚙ " + s.tool_name;
         if (!s.tool_args.empty() && s.tool_args != "{}") {
@@ -100,8 +102,9 @@ Element segment_body(const Segment& s, bool collapsed) {
     return text("");
 }
 
-Element render_segment(const Segment& s, int idx, bool selected, bool collapsed, bool show_index) {
-    Element body = segment_body(s, collapsed);
+Element render_segment(const Segment& s, int idx, bool selected, bool collapsed, bool show_index,
+                       bool markdown) {
+    Element body = segment_body(s, collapsed, markdown);
     Element accent = selected ? (text("┃ ") | color(Color::Cyan)) : text("  ");
     Element row = hbox({accent, body | flex});
     if (show_index) {
@@ -113,17 +116,48 @@ Element render_segment(const Segment& s, int idx, bool selected, bool collapsed,
 }
 
 // A scrollable modal panel (dimmed background underneath, centered box on top).
-Element modal_overlay(Element base, const std::string& title, Element content, float scroll) {
+Element modal_overlay(Element base, const std::string& title, Element content, float scroll,
+                      const std::string& footer) {
     Element panel =
         vbox({
             text(" " + title + " ") | bold | color(Color::White) | bgcolor(Color::Blue),
             separator(),
             content | focusPositionRelative(0.0f, scroll) | yframe | flex,
             separator(),
-            text("↑/↓ pgup/pgdn scroll · esc close") | dim | hcenter,
+            text(footer) | dim | hcenter,
         }) |
         border | bgcolor(Color::Black) | size(WIDTH, LESS_THAN, 92) | size(HEIGHT, LESS_THAN, 32);
     return dbox({base | dim, panel | center});
+}
+
+Element config_modal_content(const std::string& model, const std::string& base_url,
+                             const std::string& workspace, const std::string& policy,
+                             const std::string& session, bool pref_markdown, bool pref_index,
+                             int sel) {
+    auto info = [](std::string k, std::string v) {
+        return hbox({text(k) | dim | size(WIDTH, EQUAL, 14), text(std::move(v))});
+    };
+    auto toggle = [&](int idx, std::string label, bool on) {
+        Element r = hbox({text(on ? "[x] " : "[ ] ") | color(on ? Color::GreenLight : Color::GrayDark),
+                          text(std::move(label))});
+        return idx == sel ? r | inverted : r;
+    };
+    return vbox({
+        text("Runtime") | bold | color(Color::YellowLight),
+        info("model", model),
+        info("base url", base_url),
+        info("workspace", workspace),
+        info("authority", policy),
+        info("session", session),
+        text(""),
+        text("Preferences  (↑/↓ select · enter toggle)") | bold | color(Color::YellowLight),
+        toggle(0, "Render markdown", pref_markdown),
+        toggle(1, "Always show segment indices", pref_index),
+        text(""),
+        paragraph("Persistent, file-backed config (a profile component) is planned for M10; "
+                  "these toggles apply to the current session.") |
+            dim,
+    });
 }
 
 Element commands_modal_content() {
@@ -227,6 +261,15 @@ int main(int argc, char** argv) {
     bool following = true;
     int popup_sel = 0;
     float modal_scroll = 0.0f;
+    int config_sel = 0;
+    bool pref_markdown = true;
+    bool pref_index = false;
+
+    const char* env_base = std::getenv("OPENAI_BASE_URL");
+    const std::string base_url = env_base != nullptr ? env_base : "https://api.openai.com/v1";
+    const char* env_policy = std::getenv("ASTRITE_AUTHORITY_POLICY");
+    const std::string policy = env_policy != nullptr ? env_policy : "review";
+    const std::string session_path = ".astrite/sessions/current.jsonl";
 
     auto seg_count = [&] {
         std::lock_guard lock(mu);
@@ -276,6 +319,9 @@ int main(int argc, char** argv) {
         } else if (n == "/status") {
             view_state.open_modal(at::Modal::status);
             modal_scroll = 0.0f;
+        } else if (n == "/config") {
+            view_state.open_modal(at::Modal::config);
+            config_sel = 0;
         } else if (n == "/clear") {
             if (!turn_active()) {
                 std::lock_guard lock(mu);
@@ -342,7 +388,8 @@ int main(int argc, char** argv) {
                 const Segment& seg = segs[static_cast<size_t>(i)];
                 lines.push_back(render_segment(seg, i,
                                                transcript_focus && view_state.selected() == i,
-                                               view_state.is_collapsed(i), transcript_focus));
+                                               view_state.is_collapsed(i),
+                                               transcript_focus || pref_index, pref_markdown));
             }
         }
         if (lines.empty()) {
@@ -413,16 +460,41 @@ int main(int argc, char** argv) {
                 content = status_modal_content(model, workspace, transcript, active);
                 break;
             }
+            case at::Modal::config:
+                title = "config";
+                content = config_modal_content(model, base_url, workspace, policy, session_path,
+                                               pref_markdown, pref_index, config_sel);
+                break;
             case at::Modal::none:
                 break;
             }
-            root_el = modal_overlay(root_el, title, content, modal_scroll);
+            const bool is_config = view_state.modal() == at::Modal::config;
+            root_el = modal_overlay(root_el, title, content, modal_scroll,
+                                    is_config ? "↑/↓ select · enter toggle · esc close"
+                                              : "↑/↓ j/k pgup/pgdn ctrl-u/ctrl-d scroll · esc close");
         }
         return root_el;
     });
 
     Component root = CatchEvent(view, [&](Event e) {
         // Modal open: scroll + close, swallow the rest.
+        // The config modal is an interactive list (select + toggle), not a scroller.
+        if (view_state.modal() == at::Modal::config) {
+            if (e == Event::Escape || e == Event::Character("q")) {
+                view_state.close_modal();
+            } else if (e == Event::ArrowUp || e == Event::Character("k")) {
+                config_sel = std::max(0, config_sel - 1);
+            } else if (e == Event::ArrowDown || e == Event::Character("j")) {
+                config_sel = std::min(1, config_sel + 1);
+            } else if (e == Event::Return || e == Event::Character(" ")) {
+                if (config_sel == 0) {
+                    pref_markdown = !pref_markdown;
+                } else {
+                    pref_index = !pref_index;
+                }
+            }
+            return true;
+        }
         if (view_state.modal_open()) {
             const bool half_down = e.input() == "\x04"; // Ctrl-D
             const bool half_up = e.input() == "\x15";   // Ctrl-U

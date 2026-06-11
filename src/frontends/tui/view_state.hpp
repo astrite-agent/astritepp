@@ -12,7 +12,7 @@
 namespace astrite::tui {
 
 enum class Focus : std::uint8_t { input, transcript };
-enum class Modal : std::uint8_t { none, help, commands, status };
+enum class Modal : std::uint8_t { none, help, commands, status, config };
 
 class ViewState {
 public:

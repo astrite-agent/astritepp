@@ -255,6 +255,16 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       **collapse/expand** (Enter/Space, plus `/collapse`·`/expand` bulk) — tool cards and
       assistant text fold to a one-line summary; `/clear`, `/top`, `/bottom`, `/focus`. Pure
       cores green (11 cases); live-verified under a pty (popup → Tab → modal → Esc → turn).
+- [x] **Markdown rendering, 2026-06-10**: safe zero-dep markdown subset parser (`markdown.hpp`,
+      pure + 12 tests; no HTML/raw passthrough — unrecognised input stays literal) + an FTXUI
+      renderer (`markdown_render.hpp`) flowing styled inline runs through a wrapping flexbox.
+      Settled assistant messages render styled; `/help` is authored as markdown. Backs the future
+      `ui.markdown` constructor.
+- [x] **vi bindings**: j/k/g/G + Ctrl-U/Ctrl-D half-page on transcript nav and modal scroll
+      (only where the user isn't typing). `select_relative` added to view-state (tested).
+- [x] **`/config` interactive dialog**: a modal showing runtime info (model, base url, workspace,
+      authority policy, session) + selectable preference toggles (render markdown, always-index)
+      flipped with Enter/Space. Persistent file-backed config remains M10.
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,

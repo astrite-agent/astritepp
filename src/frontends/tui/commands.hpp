@@ -20,6 +20,7 @@ inline const std::vector<SlashCommand>& all_commands() {
         {"/help", "Show the help overlay"},
         {"/commands", "List all slash commands"},
         {"/status", "Show session status"},
+        {"/config", "Configure session preferences"},
         {"/clear", "Clear the transcript view"},
         {"/focus", "Toggle focus: input ↔ transcript"},
         {"/collapse", "Collapse all transcript segments"},
