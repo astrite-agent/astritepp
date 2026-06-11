@@ -51,8 +51,8 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
         }
         auto client = std::make_shared<llm::Client>(std::move(*cfg));
         opts.chat = [client](const Value& messages, const Value& tools,
-                             llm::StreamAccumulator::DeltaSink on_delta) {
-            return client->stream_chat(messages, tools, std::move(on_delta));
+                             llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
+            return client->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
         };
     }
 
@@ -239,7 +239,8 @@ void Runtime::register_effects() {
                 *messages, tools != nullptr ? *tools : Value::list({}),
                 [this](std::string_view delta) {
                     events_.push(AssistantDelta{std::string(delta)});
-                });
+                },
+                current_cancel_);
             if (!turn.has_value()) {
                 return std::unexpected(kernel::KernelError{"llm.stream: " + turn.error()});
             }
@@ -285,8 +286,9 @@ Value Runtime::tool_definitions() const {
     return Value::list(std::move(defs));
 }
 
-bool Runtime::submit_user_message(const std::string& text) {
+bool Runtime::submit_user_message(const std::string& text, std::stop_token cancel) {
     std::lock_guard turn_lock(turn_mu_);
+    current_cancel_ = std::move(cancel);
     events_.push(Started{});
 
     auto fail = [&](std::string message) {

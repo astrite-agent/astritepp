@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <string>
 
 #include "kernel/primitive.hpp"
@@ -20,10 +21,11 @@
 
 namespace astrite::runtime {
 
-// Injectable model transport: messages/tools in, settled turn out, deltas live.
+// Injectable model transport: messages/tools in, settled turn out, deltas live,
+// cancellation via the turn's stop_token.
 using ChatFn = std::function<std::expected<llm::CompletedTurn, std::string>(
     const schema::Value& messages, const schema::Value& tools,
-    llm::StreamAccumulator::DeltaSink on_delta)>;
+    llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel)>;
 
 struct Options {
     std::filesystem::path session_file;
@@ -40,7 +42,8 @@ public:
 
     // Blocking: append the user message, walk `turn`, emit events. Exactly one
     // terminal event per call (TurnFinished | TurnError). Returns false on error.
-    bool submit_user_message(const std::string& text);
+    // `cancel` aborts an in-flight model stream (surfaces as a TurnError).
+    bool submit_user_message(const std::string& text, std::stop_token cancel = {});
 
     [[nodiscard]] EventChannel& events() { return events_; }
 
@@ -54,7 +57,8 @@ private:
     kernel::Registry registry_;
     EventChannel events_;
     schema::Value tool_defs_;
-    std::mutex turn_mu_; // one turn at a time
+    std::mutex turn_mu_;             // one turn at a time
+    std::stop_token current_cancel_; // the active turn's cancel token (set under turn_mu_)
 };
 
 } // namespace astrite::runtime

@@ -236,7 +236,16 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       runtime events; transcript state is a pure, unit-tested event fold (`transcript.hpp`)
       shared-ready for the UiTree interpreter; live-verified under a pty (tool card rendered
       mid-turn). Warning wall moved to a target-scoped interface so vendored trees build with
-      their own flags. Everything below remains the real M8.
+      their own flags.
+- [x] **TUI chrome enhancement, 2026-06-10**: header bar (branding + model + workspace + live
+      `ready`/`working` status with an animated spinner driven by a ticker thread); scrollable
+      transcript via `focusPositionRelative` with follow-tail that releases on manual scroll
+      (PageUp/PageDown/Home/End + mouse wheel) and a "↓ more" indicator; styled segments
+      (cyan user lines, streaming `▌` cursor, bordered tool cards with clipped results, red
+      error cards); keybinding footer; **Escape cancels an in-flight turn** — wired through new
+      runtime `submit_user_message(text, stop_token)` cancellation that aborts the curl stream.
+      Durable across the UiTree migration (only per-segment drawing gets replaced). The deeper
+      M8 (UiTree value type, `ui.*` vocabulary, `view` components, chrome invariant) is below.
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,

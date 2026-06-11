@@ -137,7 +137,7 @@ struct ScriptedChat {
 
     runtime::ChatFn fn() {
         return [this](const Value& messages, const Value&,
-                      llm::StreamAccumulator::DeltaSink on_delta)
+                      llm::StreamAccumulator::DeltaSink on_delta, std::stop_token)
                    -> std::expected<llm::CompletedTurn, std::string> {
             seen_message_counts.push_back(messages.as_list()->size());
             if (calls >= script.size()) {
@@ -246,7 +246,7 @@ TEST_CASE("transcript continuity across submits; system prompt seeded exactly on
 TEST_CASE("a chat transport error surfaces as TurnError, exactly one terminal event") {
     fs::path file = temp_session();
     auto rt = runtime::Runtime::create(test_options(
-        file, [](const Value&, const Value&, llm::StreamAccumulator::DeltaSink)
+        file, [](const Value&, const Value&, llm::StreamAccumulator::DeltaSink, std::stop_token)
                   -> std::expected<llm::CompletedTurn, std::string> {
             return std::unexpected("boom");
         }));
@@ -274,8 +274,8 @@ TEST_CASE("model-callable tool definitions are derived from tool components") {
     fs::path file = temp_session();
     bool saw_tools = false;
     auto rt = runtime::Runtime::create(test_options(
-        file, [&](const Value&, const Value& tools, llm::StreamAccumulator::DeltaSink)
-                  -> std::expected<llm::CompletedTurn, std::string> {
+        file, [&](const Value&, const Value& tools, llm::StreamAccumulator::DeltaSink,
+                  std::stop_token) -> std::expected<llm::CompletedTurn, std::string> {
             const Value::List* list = tools.as_list();
             REQUIRE(list != nullptr);
             REQUIRE(list->size() == 1); // echo only; `turn` is an agent, not a tool
