@@ -14,6 +14,7 @@ add_executable(astrite_tests
     trust_test.cpp
     fs_helper_test.cpp
     tui_logic_test.cpp
+    markdown_test.cpp
 )
 target_link_libraries(astrite_tests PRIVATE doctest astrite_core astrite_llm astrite_runtime astrite_sandbox)
 target_include_directories(astrite_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

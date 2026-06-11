@@ -30,6 +30,7 @@
 
 #include "frontends/common.hpp"
 #include "frontends/tui/commands.hpp"
+#include "frontends/tui/markdown_render.hpp"
 #include "frontends/tui/transcript.hpp"
 #include "frontends/tui/view_state.hpp"
 #include "runtime/runtime.hpp"
@@ -76,7 +77,10 @@ Element segment_body(const Segment& s, bool collapsed) {
         if (collapsed) {
             return paragraph(first_line(s.text) + " …") | color(Color::GrayLight);
         }
-        return paragraph(s.done ? s.text : s.text + " ▌");
+        // Settled messages render as styled markdown; the streaming partial stays
+        // raw (no half-parsed flicker) with a cursor.
+        return s.done ? astrite::tui::render_markdown(s.text)
+                      : paragraph(s.text + " ▌");
     case Segment::Kind::tool: {
         std::string head = std::string(collapsed ? "▸ " : "▾ ") + "⚙ " + s.tool_name;
         if (!s.tool_args.empty() && s.tool_args != "{}") {
@@ -133,27 +137,32 @@ Element commands_modal_content() {
     return vbox(std::move(rows));
 }
 
+// Help content is authored as markdown and rendered through the same renderer
+// that styles assistant output — dogfooding it.
 Element help_modal_content() {
-    auto line = [](std::string s) { return paragraph(std::move(s)); };
-    return vbox({
-        text("astrite++") | bold,
-        line("A secure coding agent whose behaviour is declarative component data "
-             "interpreted by a small kernel. Every effect is capability-gated and runs "
-             "confined by an OS sandbox."),
-        text(""),
-        text("Input") | bold | color(Color::YellowLight),
-        line("Type a message and press Enter. Start with '/' for a command — a completion "
-             "popup appears; Tab fills in the highlighted command."),
-        text(""),
-        text("Navigation") | bold | color(Color::YellowLight),
-        line("Tab switches focus between the input and the transcript. In the transcript, "
-             "↑/↓ select a segment, Enter/Space collapse or expand it, Home/End jump to "
-             "ends. PageUp/PageDown and the mouse wheel scroll any time."),
-        text(""),
-        text("Turns") | bold | color(Color::YellowLight),
-        line("Esc cancels an in-flight turn. The spinner in the header shows when the "
-             "agent is working."),
-    });
+    static const std::string kHelp = R"(# astrite++
+
+A secure coding agent whose behaviour is declarative component data interpreted
+by a small kernel. Every effect is capability-gated and runs confined by an OS
+sandbox.
+
+## Input
+
+Type a message and press **Enter**. Start with `/` for a command — a completion
+popup appears; **Tab** fills in the highlighted command.
+
+## Navigation
+
+**Tab** switches focus between the input and the transcript. In the transcript,
+**↑/↓** or **j/k** select a segment, **Enter/Space** collapse or expand it,
+**g/G** or Home/End jump to the ends. PageUp/PageDown, Ctrl-U/Ctrl-D, and the
+mouse wheel scroll any time.
+
+## Turns
+
+**Esc** cancels an in-flight turn. The spinner in the header shows when the
+agent is working.)";
+    return astrite::tui::render_markdown(kHelp);
 }
 
 Element status_modal_content(const std::string& model, const std::string& workspace,
