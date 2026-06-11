@@ -29,6 +29,7 @@ struct SegmentWire {
     std::string tool_result;
     std::string risk;
     std::vector<std::string> caps;
+    int resolution = 0; // proposal cards: 0 pending, 1 approved, 2 rejected
 };
 
 [[nodiscard]] inline const char* kind_name(Segment::Kind k) {
@@ -60,8 +61,8 @@ struct SegmentWire {
 }
 
 [[nodiscard]] inline SegmentWire to_wire(const Segment& s) {
-    return SegmentWire{kind_name(s.kind), s.text,  s.tool_name,
-                       s.tool_args,       s.tool_result, s.risk, s.caps};
+    return SegmentWire{kind_name(s.kind), s.text, s.tool_name, s.tool_args,
+                       s.tool_result,    s.risk, s.caps,      s.resolution};
 }
 
 [[nodiscard]] inline Segment from_wire(const SegmentWire& w) {
@@ -73,6 +74,7 @@ struct SegmentWire {
     s.tool_result = w.tool_result;
     s.risk = w.risk;
     s.caps = w.caps;
+    s.resolution = w.resolution;
     s.done = true; // persisted segments are finalized
     return s;
 }

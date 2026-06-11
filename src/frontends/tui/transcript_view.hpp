@@ -32,7 +32,7 @@ using ProposalAction = std::function<void(const std::string& name, bool approve)
 
 class TranscriptView {
 public:
-    TranscriptView(const Transcript& transcript, const bool* markdown, const bool* show_index)
+    TranscriptView(Transcript& transcript, const bool* markdown, const bool* show_index)
         : transcript_(transcript), markdown_(markdown), show_index_(show_index),
           container_(ftxui::Container::Vertical({}, &selected_)) {}
 
@@ -86,13 +86,11 @@ public:
             container_->DetachAllChildren();
             built_ = 0;
             collapsed_.clear();
-            resolved_.clear();
             selected_ = 0;
         }
         bool grew = false;
         while (built_ < n) {
             collapsed_.push_back(false);
-            resolved_.push_back(0);
             container_->Add(make_segment(built_));
             ++built_;
             grew = true;
@@ -148,7 +146,7 @@ private:
         Component approve = Button(
             "Approve",
             [this, index, name] {
-                resolved_[static_cast<std::size_t>(index)] = 1;
+                transcript_.set_resolution(index, 1);
                 if (on_action_) {
                     on_action_(name, true);
                 }
@@ -157,7 +155,7 @@ private:
         Component reject = Button(
             "Reject",
             [this, index, name] {
-                resolved_[static_cast<std::size_t>(index)] = 2;
+                transcript_.set_resolution(index, 2);
                 if (on_action_) {
                     on_action_(name, false);
                 }
@@ -180,7 +178,7 @@ private:
                 }
             }
             rows.push_back(text(meta));
-            const int state = resolved_[static_cast<std::size_t>(index)];
+            const int state = s.resolution;
             if (state == 1) {
                 rows.push_back(text("✓ approved") | color(Color::GreenLight));
             } else if (state == 2) {
@@ -197,14 +195,13 @@ private:
         return Renderer(buttons, render);
     }
 
-    const Transcript& transcript_;
+    Transcript& transcript_;
     const bool* markdown_;
     const bool* show_index_;
     ProposalAction on_action_;
     int selected_ = 0; // declared before container_: Container::Vertical captures &selected_
     int built_ = 0;
     std::vector<bool> collapsed_;
-    std::vector<int> resolved_; // proposal cards: 0 pending, 1 approved, 2 rejected
     ftxui::Component container_;
 };
 

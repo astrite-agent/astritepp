@@ -183,6 +183,25 @@ TEST_CASE("transcript view: clicking a segment toggles its collapse") {
     CHECK(v.is_collapsed(0));
 }
 
+TEST_CASE("transcript view: a restored, already-approved proposal shows its outcome") {
+    Transcript t;
+    bool md = false, idx = false;
+    Segment s; // as if loaded from disk
+    s.kind = Segment::Kind::proposal;
+    s.tool_name = "wave";
+    s.risk = "none";
+    s.resolution = 1; // approved
+    s.done = true;
+    t.restore({s});
+
+    TranscriptView v(t, &md, &idx);
+    v.set_proposal_action([](const std::string&, bool) {});
+    v.sync();
+    std::string out = render_to_string(v.component(), 60, 6);
+    CHECK(out.find("approved") != std::string::npos);
+    CHECK(out.find("Approve") == std::string::npos); // the button is gone
+}
+
 TEST_CASE("transcript view: a proposal segment renders as kernel chrome") {
     Transcript t;
     bool md = false, idx = false;

@@ -68,6 +68,24 @@ TEST_CASE("transcript io: round-trips every segment kind") {
     fs::remove(path);
 }
 
+TEST_CASE("transcript io: a proposal's resolution survives a round-trip") {
+    Transcript t;
+    astrite::runtime::ComponentProposed p;
+    p.name = "wave";
+    p.kind = "tool";
+    p.risk = "none";
+    t.apply(p);
+    t.set_resolution(0, 1); // approved
+
+    fs::path path = tmp("resolution");
+    REQUIRE(save_transcript(path, t.segments()));
+    std::vector<Segment> loaded = load_transcript(path);
+    REQUIRE(loaded.size() == 1);
+    CHECK(loaded[0].kind == Segment::Kind::proposal);
+    CHECK(loaded[0].resolution == 1);
+    fs::remove(path);
+}
+
 TEST_CASE("transcript io: a missing file restores nothing") {
     CHECK(load_transcript(fs::temp_directory_path() / "astrite_no_such_transcript.jsonl").empty());
 }

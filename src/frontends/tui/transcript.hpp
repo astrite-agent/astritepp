@@ -24,6 +24,7 @@ struct Segment {
     // proposal segments: a model-authored component awaiting human review.
     std::string risk;
     std::vector<std::string> caps;
+    int resolution = 0; // proposal cards: 0 pending, 1 approved, 2 rejected
     bool done = false;
 };
 
@@ -112,6 +113,14 @@ public:
     [[nodiscard]] bool turn_active() const { return turn_active_; }
 
     void clear() { segments_.clear(); }
+
+    // Record a proposal card's outcome (1 approved, 2 rejected) so it survives a
+    // reopen instead of reverting to pending.
+    void set_resolution(int index, int value) {
+        if (index >= 0 && index < static_cast<int>(segments_.size())) {
+            segments_[static_cast<std::size_t>(index)].resolution = value;
+        }
+    }
 
     // Replace the transcript with persisted segments (session restore). They are
     // already finalized; no turn is active.
