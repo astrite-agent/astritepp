@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include <csignal>
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/landlock.h>
@@ -284,6 +285,136 @@ bool skip_walk_dir(const std::string& name) {
     return false;
 }
 
+bool write_file_full(const std::string& path, const std::string& content) {
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        return false;
+    }
+    const char* p = content.data();
+    std::size_t n = content.size();
+    bool ok = true;
+    while (n > 0) {
+        ssize_t w = ::write(fd, p, n);
+        if (w <= 0) {
+            ok = false;
+            break;
+        }
+        p += w;
+        n -= static_cast<std::size_t>(w);
+    }
+    ::close(fd);
+    return ok;
+}
+
+int op_write(const std::string& base, const std::string& rel, const std::string& content) {
+    if (!write_file_full(join(base, rel), content)) {
+        write_str(1, "fs.write: cannot write `" + rel + "`: " + std::strerror(errno));
+        return 1;
+    }
+    write_str(1, "wrote " + std::to_string(content.size()) + " bytes to " + rel);
+    return 0;
+}
+
+// stdin payload framing for edit: [u64 old_len][old][u64 new_len][new], native
+// byte order (same binary on both ends). Returns false on a malformed frame.
+bool parse_edit_payload(const std::string& payload, std::string& old_text, std::string& new_text) {
+    std::size_t pos = 0;
+    auto take_len = [&](std::uint64_t& out) {
+        if (pos + sizeof(out) > payload.size()) {
+            return false;
+        }
+        std::memcpy(&out, payload.data() + pos, sizeof(out));
+        pos += sizeof(out);
+        return true;
+    };
+    std::uint64_t ol = 0;
+    if (!take_len(ol) || pos + ol > payload.size()) {
+        return false;
+    }
+    old_text.assign(payload, pos, ol);
+    pos += ol;
+    std::uint64_t nl = 0;
+    if (!take_len(nl) || pos + nl > payload.size()) {
+        return false;
+    }
+    new_text.assign(payload, pos, nl);
+    return true;
+}
+
+int op_edit(const std::string& base, const std::string& rel, const std::string& expected_s,
+            const std::string& payload) {
+    std::string old_text, new_text;
+    if (!parse_edit_payload(payload, old_text, new_text)) {
+        write_str(1, "fs.edit: malformed payload");
+        return 1;
+    }
+    if (old_text.empty()) {
+        write_str(1, "fs.edit: old_text must not be empty");
+        return 1;
+    }
+    std::size_t expected = expected_s.empty() ? 1 : std::strtoul(expected_s.c_str(), nullptr, 10);
+
+    std::string full = join(base, rel);
+    int fd = ::open(full.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        write_str(1, "fs.edit: cannot open `" + rel + "`: " + std::strerror(errno));
+        return 1;
+    }
+    std::string content;
+    bool read_ok = read_fd_all(fd, content, kReadCap);
+    ::close(fd);
+    if (!read_ok) {
+        write_str(1, "fs.edit: read error on `" + rel + "`");
+        return 1;
+    }
+
+    std::size_t count = 0;
+    for (std::size_t at = content.find(old_text); at != std::string::npos;
+         at = content.find(old_text, at + old_text.size())) {
+        ++count;
+    }
+    if (count != expected) {
+        write_str(1, "fs.edit: expected " + std::to_string(expected) + " occurrence(s) of " +
+                         "old_text in `" + rel + "`, found " + std::to_string(count));
+        return 1;
+    }
+
+    std::string result;
+    result.reserve(content.size());
+    std::size_t pos = 0;
+    for (std::size_t at = content.find(old_text); at != std::string::npos;
+         at = content.find(old_text, pos)) {
+        result.append(content, pos, at - pos);
+        result += new_text;
+        pos = at + old_text.size();
+    }
+    result.append(content, pos, std::string::npos);
+
+    if (!write_file_full(full, result)) {
+        write_str(1, "fs.edit: cannot write `" + rel + "`: " + std::strerror(errno));
+        return 1;
+    }
+    write_str(1, "replaced " + std::to_string(count) + " occurrence(s) in " + rel);
+    return 0;
+}
+
+std::string frame_edit_payload(const std::string& old_text, const std::string& new_text) {
+    std::string out;
+    std::uint64_t ol = old_text.size();
+    std::uint64_t nl = new_text.size();
+    out.append(reinterpret_cast<const char*>(&ol), sizeof(ol));
+    out += old_text;
+    out.append(reinterpret_cast<const char*>(&nl), sizeof(nl));
+    out += new_text;
+    return out;
+}
+
+std::string read_stdin_all() {
+    std::string in;
+    read_fd_all(STDIN_FILENO, in, kCaptureCap);
+    return in;
+}
+
 int op_find(const std::string& base, const std::string& rel, const std::string& pattern) {
     if (pattern.empty()) {
         write_str(1, "search.find: empty pattern");
@@ -453,6 +584,98 @@ OpResult run_fs_op(const std::string& op, const std::filesystem::path& base, con
     return {ok, std::move(output)};
 }
 
+namespace {
+
+// Self-re-exec a confined child, send `payload` on its stdin, capture its stdout.
+// Used by the write ops: content too large for argv flows through the pipe, and
+// the child reads all of stdin before writing status, so there is no deadlock.
+OpResult run_with_stdin(const std::string& op, const std::filesystem::path& base,
+                        const std::string& rel, const std::string& extra,
+                        const std::string& payload) {
+    static const auto ignore_sigpipe = [] {
+        ::signal(SIGPIPE, SIG_IGN); // a child that dies early must not signal us
+        return 0;
+    }();
+    (void)ignore_sigpipe;
+
+    std::string base_s = base.string();
+    std::vector<char*> av;
+    av.push_back(const_cast<char*>("astrite"));
+    av.push_back(const_cast<char*>("__sbx"));
+    av.push_back(const_cast<char*>(op.c_str()));
+    av.push_back(const_cast<char*>(base_s.c_str()));
+    av.push_back(const_cast<char*>(rel.c_str()));
+    if (!extra.empty()) {
+        av.push_back(const_cast<char*>(extra.c_str()));
+    }
+    av.push_back(nullptr);
+
+    int in_fds[2];
+    int out_fds[2];
+    if (::pipe(in_fds) != 0) {
+        return {false, "fs op: pipe failed"};
+    }
+    if (::pipe(out_fds) != 0) {
+        ::close(in_fds[0]);
+        ::close(in_fds[1]);
+        return {false, "fs op: pipe failed"};
+    }
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(in_fds[0]);
+        ::close(in_fds[1]);
+        ::close(out_fds[0]);
+        ::close(out_fds[1]);
+        return {false, "fs op: fork failed"};
+    }
+    if (pid == 0) {
+        ::dup2(in_fds[0], STDIN_FILENO);
+        ::dup2(out_fds[1], STDOUT_FILENO);
+        ::close(in_fds[0]);
+        ::close(in_fds[1]);
+        ::close(out_fds[0]);
+        ::close(out_fds[1]);
+        ::execv("/proc/self/exe", av.data());
+        ::_exit(127);
+    }
+    ::close(in_fds[0]);
+    ::close(out_fds[1]);
+    // Send the payload, then EOF, before reading the (small) status back.
+    const char* p = payload.data();
+    std::size_t n = payload.size();
+    while (n > 0) {
+        ssize_t w = ::write(in_fds[1], p, n);
+        if (w <= 0) {
+            break; // child gone (EPIPE) — its status/exit code carries the failure
+        }
+        p += w;
+        n -= static_cast<std::size_t>(w);
+    }
+    ::close(in_fds[1]);
+    std::string output;
+    read_fd_all(out_fds[0], output, kCaptureCap);
+    ::close(out_fds[0]);
+    int status = 0;
+    if (::waitpid(pid, &status, 0) < 0) {
+        return {false, "fs op: wait failed"};
+    }
+    bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return {ok, std::move(output)};
+}
+
+} // namespace
+
+OpResult fs_write(const std::filesystem::path& base, const std::string& rel,
+                  const std::string& content) {
+    return run_with_stdin("write", base, rel, "", content);
+}
+
+OpResult fs_edit(const std::filesystem::path& base, const std::string& rel,
+                 const std::string& old_text, const std::string& new_text, std::size_t expected) {
+    return run_with_stdin("edit", base, rel, std::to_string(expected),
+                          frame_edit_payload(old_text, new_text));
+}
+
 int maybe_run_helper(int argc, char** argv) {
     if (argc < 2 || std::strcmp(argv[1], "__sbx") != 0) {
         return -1; // not a helper invocation; caller proceeds normally
@@ -466,8 +689,13 @@ int maybe_run_helper(int argc, char** argv) {
     std::string rel = argv[4];
     std::string extra = argc > 5 ? argv[5] : "";
 
+    const bool is_write = (op == "write" || op == "edit");
     Policy policy;
-    policy.read_paths = {base}; // read-only confinement to the workspace base
+    if (is_write) {
+        policy.write_paths = {base}; // create/write/replace confined to the base
+    } else {
+        policy.read_paths = {base}; // read-only confinement
+    }
     if (!apply(policy)) {
         write_str(1, "sbx: sandbox apply failed");
         return 126;
@@ -480,6 +708,12 @@ int maybe_run_helper(int argc, char** argv) {
     }
     if (op == "find") {
         return op_find(base, rel, extra);
+    }
+    if (op == "write") {
+        return op_write(base, rel, read_stdin_all());
+    }
+    if (op == "edit") {
+        return op_edit(base, rel, extra, read_stdin_all());
     }
     write_str(1, "sbx: unknown op `" + op + "`");
     return 2;

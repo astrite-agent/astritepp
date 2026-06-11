@@ -1,0 +1,22 @@
+{
+  // Create or overwrite a workspace file. Path confined internally (belt:
+  // path.resolve) and written by a Landlock write-confined child (suspenders).
+  "component": "fs_write",
+  "kind": "tool",
+  "caps": ["fs.write"],
+  "description": "Create or overwrite a UTF-8 text file in the workspace.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {"type": "string", "description": "Workspace-relative file path."},
+      "content": {"type": "string", "description": "Full new file contents."}
+    },
+    "required": ["path", "content"]
+  },
+  "tree": {
+    "do": "fs.write",
+    "with": {"path": {"ref": "input.path"}, "content": {"ref": "input.content"}},
+    "as": "out"
+  },
+  "output": {"ref": "out"}
+}

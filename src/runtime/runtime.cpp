@@ -159,6 +159,56 @@ void Runtime::register_effects() {
         });
 
     registry_.add_effect(
+        "fs.write", "fs.write",
+        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+            auto rel = confine(args, "fs.write");
+            if (!rel.has_value()) {
+                return std::unexpected(rel.error());
+            }
+            const Value* content = args.get("content");
+            if (content == nullptr || content->as_str() == nullptr) {
+                return std::unexpected(kernel::KernelError{"fs.write: `content` must be a string"});
+            }
+            sandbox::OpResult r = sandbox::fs_write(base, *rel, *content->as_str());
+            if (!r.ok) {
+                return std::unexpected(kernel::KernelError{r.output.empty() ? "fs.write failed"
+                                                                            : r.output});
+            }
+            return Value::str(std::move(r.output));
+        });
+    registry_.add_effect(
+        "fs.edit", "fs.edit",
+        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+            auto rel = confine(args, "fs.edit");
+            if (!rel.has_value()) {
+                return std::unexpected(rel.error());
+            }
+            const Value* old_text = args.get("old_text");
+            const Value* new_text = args.get("new_text");
+            if (old_text == nullptr || old_text->as_str() == nullptr || new_text == nullptr ||
+                new_text->as_str() == nullptr) {
+                return std::unexpected(
+                    kernel::KernelError{"fs.edit: `old_text` and `new_text` must be strings"});
+            }
+            std::size_t expected = 1;
+            if (const Value* e = args.get("expected_replacements"); e != nullptr) {
+                if (const std::int64_t* n = e->as_int(); n != nullptr && *n >= 0) {
+                    expected = static_cast<std::size_t>(*n);
+                } else {
+                    return std::unexpected(kernel::KernelError{
+                        "fs.edit: `expected_replacements` must be a non-negative integer"});
+                }
+            }
+            sandbox::OpResult r =
+                sandbox::fs_edit(base, *rel, *old_text->as_str(), *new_text->as_str(), expected);
+            if (!r.ok) {
+                return std::unexpected(kernel::KernelError{r.output.empty() ? "fs.edit failed"
+                                                                            : r.output});
+            }
+            return Value::str(std::move(r.output));
+        });
+
+    registry_.add_effect(
         "session.read", "session.read",
         [this](const Value&) -> std::expected<Value, kernel::KernelError> {
             return session_.read();

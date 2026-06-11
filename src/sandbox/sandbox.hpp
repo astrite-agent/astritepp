@@ -50,6 +50,16 @@ struct OpResult {
 [[nodiscard]] OpResult run_fs_op(const std::string& op, const std::filesystem::path& base,
                                  const std::string& rel, const std::string& extra = "");
 
+// Write-confined variants: the child applies a write policy on `base` and receives
+// its payload over stdin (so large content never goes through argv). fs_write
+// creates/overwrites; fs_edit does exact-match replacement, failing unless the
+// number of matches equals `expected`.
+[[nodiscard]] OpResult fs_write(const std::filesystem::path& base, const std::string& rel,
+                                const std::string& content);
+[[nodiscard]] OpResult fs_edit(const std::filesystem::path& base, const std::string& rel,
+                               const std::string& old_text, const std::string& new_text,
+                               std::size_t expected);
+
 // The hidden-subcommand entry point. Frontends (and the test binary) call this
 // first in main(): if argv is a `__sbx` invocation it runs the confined op and
 // returns the exit code; otherwise it returns -1 and main() proceeds normally.

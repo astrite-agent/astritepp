@@ -126,4 +126,67 @@ TEST_CASE("fs helper find: skips the version-control and astrite state dirs") {
     fs::remove_all(ws);
 }
 
+namespace {
+std::string slurp(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+} // namespace
+
+TEST_CASE("fs helper write: creates a new file and overwrites an existing one") {
+    fs::path ws = make_ws("write");
+    auto created = astrite::sandbox::fs_write(ws, "new.txt", "fresh content");
+    CHECK(created.ok);
+    CHECK(slurp(ws / "new.txt") == "fresh content");
+
+    auto overwritten = astrite::sandbox::fs_write(ws, "new.txt", "replaced");
+    CHECK(overwritten.ok);
+    CHECK(slurp(ws / "new.txt") == "replaced");
+    fs::remove_all(ws);
+}
+
+TEST_CASE("fs helper write: a new file in a subdir whose parent exists works") {
+    fs::path ws = make_ws("write_sub");
+    fs::create_directories(ws / "sub");
+    auto r = astrite::sandbox::fs_write(ws, "sub/inner.txt", "x");
+    CHECK(r.ok);
+    CHECK(slurp(ws / "sub" / "inner.txt") == "x");
+    fs::remove_all(ws);
+}
+
+TEST_CASE("fs helper write: Landlock denies writing outside the base") {
+    fs::path ws = make_ws("write_escape");
+    fs::path outside = ws.parent_path() / (ws.filename().string() + "_out.txt");
+    auto r = astrite::sandbox::fs_write(ws, "../" + outside.filename().string(), "leak");
+    CHECK_FALSE(r.ok);
+    CHECK_FALSE(fs::exists(outside));
+    fs::remove_all(ws);
+}
+
+TEST_CASE("fs helper edit: exact-match replacement honours the expected count") {
+    fs::path ws = make_ws("edit");
+    write_file(ws / "f.txt", "alpha beta alpha");
+    auto r = astrite::sandbox::fs_edit(ws, "f.txt", "alpha", "GAMMA", 2);
+    CHECK(r.ok);
+    CHECK(slurp(ws / "f.txt") == "GAMMA beta GAMMA");
+    fs::remove_all(ws);
+}
+
+TEST_CASE("fs helper edit: a count mismatch fails and leaves the file untouched") {
+    fs::path ws = make_ws("edit_mismatch");
+    write_file(ws / "f.txt", "x x x");
+    auto r = astrite::sandbox::fs_edit(ws, "f.txt", "x", "y", 1); // 3 present, 1 expected
+    CHECK_FALSE(r.ok);
+    CHECK(slurp(ws / "f.txt") == "x x x"); // unchanged
+    fs::remove_all(ws);
+}
+
+TEST_CASE("fs helper edit: absent old_text and missing file both fail") {
+    fs::path ws = make_ws("edit_absent");
+    write_file(ws / "f.txt", "nothing matching");
+    CHECK_FALSE(astrite::sandbox::fs_edit(ws, "f.txt", "zzz", "q", 1).ok);
+    CHECK_FALSE(astrite::sandbox::fs_edit(ws, "missing.txt", "a", "b", 1).ok);
+    fs::remove_all(ws);
+}
+
 #endif // __linux__

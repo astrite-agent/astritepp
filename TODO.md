@@ -191,9 +191,13 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       test binary dispatch the helper first in `main()`.
 - [x] fs **read** primitives via sandbox children: `fs.read` (4 MiB cap, rejects dirs),
       `fs.list` (bounded sorted listing, dirs marked, symlinks omitted). Belt (`path.resolve`)
-      in the prim + suspenders (Landlock read-confined child). **Write half**
-      (`fs.write`/`fs.edit`/`fs.delete`/`fs.mkdir`/`fs.rename`) still pending — needs the
-      write-confined helper + transaction story.
+      in the prim + suspenders (Landlock read-confined child).
+- [x] fs **write** primitives (M7c): `fs.write` (create/overwrite, content via the child's
+      stdin so it never goes through argv) and `fs.edit` (exact-match replacement, fails unless
+      the match count equals `expected_replacements` so edits never silently mis-apply). The
+      helper gained a write-confined mode (`write_paths` policy) + a bidirectional pipe; Landlock
+      denies writes outside the base (proven), a count mismatch leaves the file untouched
+      (proven). `fs.delete`/`fs.mkdir`/`fs.rename` still pending (with the task/transaction half).
 - [x] `search.find`: bounded literal text search (path:line:text, capped); skips symlinks,
       binary files, and VCS/build state dirs. (Linear-time regex engine only if/when justified.)
 - [ ] `task` component kind (DESIGN §4/§6): pinned argv template with typed, shape-validated
@@ -213,9 +217,9 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       first contact.
 - [ ] Argument-injection corpus: leading-dash hole values rejected, option-position holes
       rejected at load, pinned `--` honored.
-- [x] Read tool components embedded + authority-checked: `fs_read.json`, `fs_list.json`,
-      `search_find.json`. (`fs_write`/`fs_edit`, `workspace_context`, dogfood task components
-      pending with the write/task half.)
+- [x] fs tool components embedded + authority-checked: `fs_read.json`, `fs_list.json`,
+      `search_find.json`, `fs_write.json`, `fs_edit.json`. (`workspace_context` + dogfood task
+      components pending with the task half.)
 - [x] End-to-end confinement check (live, 2026-06-10): model listed `components/`, read
       `echo.json`, and an attempted `/etc/hostname` read was rejected by the belt
       (`absolute path is an escape`); the suspenders (Landlock denying `..` past the base even

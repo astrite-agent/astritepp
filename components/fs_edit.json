@@ -1,0 +1,32 @@
+{
+  // Exact-match replacement: fails unless old_text occurs exactly
+  // expected_replacements times (default 1), so edits never silently mis-apply.
+  "component": "fs_edit",
+  "kind": "tool",
+  "caps": ["fs.edit"],
+  "description": "Replace exact text in a workspace file (exact-match, count-checked).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {"type": "string", "description": "Workspace-relative file path."},
+      "old_text": {"type": "string", "description": "Exact text to replace."},
+      "new_text": {"type": "string", "description": "Replacement text."},
+      "expected_replacements": {
+        "type": "integer",
+        "description": "Required number of matches (default 1)."
+      }
+    },
+    "required": ["path", "old_text", "new_text"]
+  },
+  "tree": {
+    "do": "fs.edit",
+    "with": {
+      "path": {"ref": "input.path"},
+      "old_text": {"ref": "input.old_text"},
+      "new_text": {"ref": "input.new_text"},
+      "expected_replacements": {"ref": "input.expected_replacements", "default": 1}
+    },
+    "as": "out"
+  },
+  "output": {"ref": "out"}
+}
