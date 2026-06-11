@@ -26,6 +26,7 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/dom/table.hpp>
+#include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
 
 #include "frontends/common.hpp"
@@ -313,6 +314,8 @@ int main(int argc, char** argv) {
     bool pref_index = false;
     int cursor_pos = 0;               // shared with the Input widget (readline editing)
     bool paste_mode = false;          // inside a bracketed paste (newlines = literal, not submit)
+    std::vector<Box> seg_boxes;       // per-segment on-screen boxes (for click hit-testing)
+    int press_x = -1, press_y = -1;   // left-press position, to distinguish click from drag-select
     astrite::tui::History history;    // Up/Down recall + Ctrl-R search
     bool rsearch = false;             // reverse-i-search mode
     std::string rquery;               // the search query being typed
@@ -470,12 +473,16 @@ int main(int argc, char** argv) {
             active = transcript.turn_active();
             const auto& segs = transcript.segments();
             count = static_cast<int>(segs.size());
+            seg_boxes.assign(static_cast<size_t>(count), Box{}); // reflect fills these
             for (int i = 0; i < count; ++i) {
                 const Segment& seg = segs[static_cast<size_t>(i)];
+                // reflect captures each segment's on-screen box (Frame writes child
+                // boxes in screen coords) so a click can be hit-tested to a segment.
                 lines.push_back(render_segment(seg, i,
                                                transcript_focus && view_state.selected() == i,
                                                view_state.is_collapsed(i),
-                                               transcript_focus || pref_index, pref_markdown));
+                                               transcript_focus || pref_index, pref_markdown) |
+                                reflect(seg_boxes[static_cast<size_t>(i)]));
             }
         }
         if (lines.empty()) {
@@ -837,6 +844,25 @@ int main(int argc, char** argv) {
                 scroll = std::min(1.0f, scroll + 0.1f);
                 following = scroll >= 0.999f;
                 return true;
+            }
+            // Left press records the position; a release at the same cell is a
+            // click (toggle the clicked segment), while a drag is left to FTXUI's
+            // built-in text selection.
+            if (e.mouse().button == Mouse::Left && e.mouse().motion == Mouse::Pressed) {
+                press_x = e.mouse().x;
+                press_y = e.mouse().y;
+                return false; // allow drag-selection to begin
+            }
+            if (e.mouse().button == Mouse::Left && e.mouse().motion == Mouse::Released &&
+                e.mouse().x == press_x && e.mouse().y == press_y) {
+                for (std::size_t i = 0; i < seg_boxes.size(); ++i) {
+                    if (seg_boxes[i].Contain(e.mouse().x, e.mouse().y)) {
+                        view_state.focus_segment(static_cast<int>(i),
+                                                 static_cast<int>(seg_boxes.size()));
+                        view_state.toggle_collapse(static_cast<int>(i));
+                        return true;
+                    }
+                }
             }
         }
         return false;

@@ -154,6 +154,22 @@ TEST_CASE("view state: collapse toggles per segment and in bulk") {
     CHECK_FALSE(v.is_collapsed(3));
 }
 
+TEST_CASE("view state: toggle by index + focus_segment (mouse-click path)") {
+    ViewState v;
+    v.toggle_collapse(2);
+    CHECK(v.is_collapsed(2));
+    v.toggle_collapse(2);
+    CHECK_FALSE(v.is_collapsed(2));
+    v.toggle_collapse(-1); // out of range: no-op, no crash
+    CHECK_FALSE(v.is_collapsed(-1));
+
+    v.focus_segment(3, 10);
+    CHECK(v.focus() == Focus::transcript);
+    CHECK(v.selected() == 3);
+    v.focus_segment(99, 10); // clamps to last
+    CHECK(v.selected() == 9);
+}
+
 TEST_CASE("view state: modal open/close, and nav is inert with no selection") {
     ViewState v;
     CHECK_FALSE(v.modal_open());

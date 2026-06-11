@@ -45,13 +45,20 @@ public:
     void select_relative(int delta, int count) { set_selected(selected_ + delta, count); }
 
     [[nodiscard]] bool is_collapsed(int index) const { return collapsed_.contains(index); }
-    void toggle_collapse_selected() {
-        if (selected_ < 0) {
+    void toggle_collapse(int index) {
+        if (index < 0) {
             return;
         }
-        if (!collapsed_.insert(selected_).second) {
-            collapsed_.erase(selected_);
+        if (!collapsed_.insert(index).second) {
+            collapsed_.erase(index);
         }
+    }
+    void toggle_collapse_selected() { toggle_collapse(selected_); }
+
+    // Mouse click on a segment: focus the transcript and select that segment.
+    void focus_segment(int index, int count) {
+        focus_ = Focus::transcript;
+        set_selected(index, count);
     }
     void collapse_all(int count) {
         for (int i = 0; i < count; ++i) {
