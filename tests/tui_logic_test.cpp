@@ -105,85 +105,7 @@ TEST_CASE("history: reverse search finds the most recent containing match") {
     CHECK(h.search_backward("", 2) == -1); // empty query never matches
 }
 
-TEST_CASE("view state: focus toggles between input and transcript") {
-    ViewState v;
-    CHECK(v.focus() == Focus::input);
-    v.toggle_focus(5);
-    CHECK(v.focus() == Focus::transcript);
-    CHECK(v.selected() == 4); // entering transcript selects the last segment
-    v.toggle_focus(5);
-    CHECK(v.focus() == Focus::input);
-}
-
-TEST_CASE("view state: entering an empty transcript selects nothing") {
-    ViewState v;
-    v.focus_transcript(0);
-    CHECK(v.selected() == -1);
-}
-
-TEST_CASE("view state: selection moves and clamps") {
-    ViewState v;
-    v.focus_transcript(3); // selected = 2
-    v.select_prev(3);
-    CHECK(v.selected() == 1);
-    v.select_prev(3);
-    v.select_prev(3); // clamps at 0
-    CHECK(v.selected() == 0);
-    v.select_next(3);
-    CHECK(v.selected() == 1);
-    v.select_last(3);
-    CHECK(v.selected() == 2);
-    v.select_first(3);
-    CHECK(v.selected() == 0);
-}
-
-TEST_CASE("view state: relative selection clamps (half-page jumps)") {
-    ViewState v;
-    v.focus_transcript(20); // selected = 19
-    v.select_relative(-10, 20);
-    CHECK(v.selected() == 9);
-    v.select_relative(-100, 20);
-    CHECK(v.selected() == 0);
-    v.select_relative(10, 20);
-    CHECK(v.selected() == 10);
-    v.select_relative(100, 20);
-    CHECK(v.selected() == 19);
-}
-
-TEST_CASE("view state: collapse toggles per segment and in bulk") {
-    ViewState v;
-    v.focus_transcript(4); // selected = 3
-    CHECK_FALSE(v.is_collapsed(3));
-    v.toggle_collapse_selected();
-    CHECK(v.is_collapsed(3));
-    v.toggle_collapse_selected();
-    CHECK_FALSE(v.is_collapsed(3));
-
-    v.collapse_all(4);
-    CHECK(v.is_collapsed(0));
-    CHECK(v.is_collapsed(3));
-    v.expand_all();
-    CHECK_FALSE(v.is_collapsed(0));
-    CHECK_FALSE(v.is_collapsed(3));
-}
-
-TEST_CASE("view state: toggle by index + focus_segment (mouse-click path)") {
-    ViewState v;
-    v.toggle_collapse(2);
-    CHECK(v.is_collapsed(2));
-    v.toggle_collapse(2);
-    CHECK_FALSE(v.is_collapsed(2));
-    v.toggle_collapse(-1); // out of range: no-op, no crash
-    CHECK_FALSE(v.is_collapsed(-1));
-
-    v.focus_segment(3, 10);
-    CHECK(v.focus() == Focus::transcript);
-    CHECK(v.selected() == 3);
-    v.focus_segment(99, 10); // clamps to last
-    CHECK(v.selected() == 9);
-}
-
-TEST_CASE("view state: modal open/close, and nav is inert with no selection") {
+TEST_CASE("view state: modal open/close (focus/selection/collapse are now FTXUI-managed)") {
     ViewState v;
     CHECK_FALSE(v.modal_open());
     v.open_modal(Modal::help);
@@ -192,8 +114,4 @@ TEST_CASE("view state: modal open/close, and nav is inert with no selection") {
     v.close_modal();
     CHECK_FALSE(v.modal_open());
     CHECK(v.modal() == Modal::none);
-
-    ViewState w; // input focus, no selection
-    w.toggle_collapse_selected(); // must not crash or collapse anything
-    CHECK_FALSE(w.is_collapsed(0));
 }
