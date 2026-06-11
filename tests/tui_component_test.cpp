@@ -100,6 +100,71 @@ TEST_CASE("transcript view: clearing the transcript rebuilds from scratch") {
     CHECK(v.count() == 1);
 }
 
+TEST_CASE("a focused empty input shows a cursor; an unfocused one does not") {
+    using namespace ftxui;
+    // FTXUI's Input draws no cursor for empty content (input.cpp), so the empty
+    // cursor is supplied via the transform hook — but only when FTXUI reports the
+    // input as Focused(). This proves the cursor is driven by real FTXUI focus.
+    std::string content;
+    InputOption opt;
+    opt.placeholder = " ";
+    opt.multiline = true;
+    opt.transform = [](InputState s) {
+        if (s.is_placeholder && s.focused) {
+            return s.element | focusCursorBarBlinking;
+        }
+        return s.element;
+    };
+    Component input = Input(&content, opt);
+
+    // Focused: input is the active child of its container.
+    Component focused_root = Container::Vertical({input});
+    auto s1 = Screen::Create(Dimension::Fixed(20), Dimension::Fixed(1));
+    Render(s1, focused_root->Render());
+    CHECK(s1.cursor().shape == Screen::Cursor::Shape::BarBlinking);
+
+    // Not focused: a focusable peer is active instead (selector 0), input is 1.
+    int sel = 0;
+    Component peer = Renderer([](bool) { return text("peer"); });
+    Component two = Container::Vertical({peer, input}, &sel);
+    auto s2 = Screen::Create(Dimension::Fixed(20), Dimension::Fixed(1));
+    Render(s2, two->Render());
+    CHECK(s2.cursor().shape == Screen::Cursor::Shape::Hidden);
+}
+
+TEST_CASE("transcript view: a proposal card's Approve/Reject buttons fire the action") {
+    Transcript t;
+    bool md = false, idx = false;
+    TranscriptView v(t, &md, &idx);
+    std::string name;
+    bool approve = false;
+    int calls = 0;
+    v.set_proposal_action([&](const std::string& n, bool a) {
+        name = n;
+        approve = a;
+        ++calls;
+    });
+    astrite::runtime::ComponentProposed p;
+    p.name = "wave";
+    p.kind = "tool";
+    p.risk = "none";
+    t.apply(p);
+    v.sync();
+
+    // selected_ defaults to 0 (the proposal). Enter routes through the segment's
+    // button container to the focused Approve button.
+    CHECK(v.component()->OnEvent(Event::Return));
+    CHECK(calls == 1);
+    CHECK(name == "wave");
+    CHECK(approve == true);
+
+    // ArrowRight moves to Reject; Enter fires it.
+    CHECK(v.component()->OnEvent(Event::ArrowRight));
+    CHECK(v.component()->OnEvent(Event::Return));
+    CHECK(calls == 2);
+    CHECK(approve == false);
+}
+
 TEST_CASE("transcript view: a proposal segment renders as kernel chrome") {
     Transcript t;
     bool md = false, idx = false;

@@ -8,16 +8,24 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
+#include <string>
 #include <vector>
 
 #include <ftxui/component/component.hpp>
+#include <ftxui/component/component_options.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/color.hpp>
 
 #include "frontends/tui/segment_render.hpp"
 #include "frontends/tui/transcript.hpp"
 
 namespace astrite::tui {
+
+// Invoked when the human clicks/activates a proposal card's button. `approve`
+// false means reject. Wired by the frontend to the runtime consent methods.
+using ProposalAction = std::function<void(const std::string& name, bool approve)>;
 
 class TranscriptView {
 public:
@@ -28,6 +36,17 @@ public:
     [[nodiscard]] ftxui::Component component() const { return container_; }
     [[nodiscard]] int selected() const { return selected_; }
     [[nodiscard]] int count() const { return built_; }
+
+    void set_proposal_action(ProposalAction action) { on_action_ = std::move(action); }
+
+    // True if the focused segment hosts interactive sub-widgets (a proposal's
+    // buttons) — the frontend then lets Enter/←/→ fall through to it instead of
+    // treating them as segment nav/collapse.
+    [[nodiscard]] bool selected_is_interactive() const {
+        const auto& segs = transcript_.segments();
+        return on_action_ && selected_ >= 0 && selected_ < static_cast<int>(segs.size()) &&
+               segs[static_cast<std::size_t>(selected_)].kind == Segment::Kind::proposal;
+    }
 
     void select(int i) {
         if (built_ > 0) {
@@ -79,12 +98,17 @@ public:
 private:
     ftxui::Component make_segment(int index) {
         using namespace ftxui;
+        const auto& segs = transcript_.segments();
+        if (on_action_ && index < static_cast<int>(segs.size()) &&
+            segs[static_cast<std::size_t>(index)].kind == Segment::Kind::proposal) {
+            return make_proposal(index);
+        }
         auto render = [this, index](bool focused) -> Element {
-            const auto& segs = transcript_.segments();
-            if (index >= static_cast<int>(segs.size())) {
+            const auto& s = transcript_.segments();
+            if (index >= static_cast<int>(s.size())) {
                 return text("");
             }
-            return render_segment(segs[static_cast<std::size_t>(index)], index, focused,
+            return render_segment(s[static_cast<std::size_t>(index)], index, focused,
                                   is_collapsed(index), (show_index_ && *show_index_) || focused,
                                   markdown_ && *markdown_);
         };
@@ -98,9 +122,45 @@ private:
         });
     }
 
+    // A proposal card with real, focusable Approve/Reject buttons — the showcase
+    // for interactive segments. The buttons live in a Container so FTXUI routes
+    // ←/→ and Enter to them when the segment is focused.
+    ftxui::Component make_proposal(int index) {
+        using namespace ftxui;
+        const std::string name = transcript_.segments()[static_cast<std::size_t>(index)].tool_name;
+        Component approve = Button(
+            "Approve", [this, name] { if (on_action_) on_action_(name, true); },
+            ButtonOption::Ascii());
+        Component reject = Button(
+            "Reject", [this, name] { if (on_action_) on_action_(name, false); },
+            ButtonOption::Ascii());
+        Component buttons = Container::Horizontal({approve, reject});
+        auto render = [this, index, approve, reject]() -> Element {
+            const auto& segs = transcript_.segments();
+            if (index >= static_cast<int>(segs.size())) {
+                return text("");
+            }
+            const Segment& s = segs[static_cast<std::size_t>(index)];
+            Elements rows;
+            rows.push_back(hbox({text("⛨ component proposal: ") | bold, text(s.tool_name) | bold}));
+            std::string meta = "risk " + s.risk;
+            if (!s.caps.empty()) {
+                meta += " · caps ";
+                for (std::size_t i = 0; i < s.caps.size(); ++i) {
+                    meta += (i != 0 ? ", " : "") + s.caps[i];
+                }
+            }
+            rows.push_back(text(meta));
+            rows.push_back(hbox({approve->Render(), text("  "), reject->Render()}));
+            return vbox(std::move(rows)) | borderDouble | color(Color::Magenta);
+        };
+        return Renderer(buttons, render);
+    }
+
     const Transcript& transcript_;
     const bool* markdown_;
     const bool* show_index_;
+    ProposalAction on_action_;
     int selected_ = 0; // declared before container_: Container::Vertical captures &selected_
     int built_ = 0;
     std::vector<bool> collapsed_;

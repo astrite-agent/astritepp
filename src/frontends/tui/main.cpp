@@ -305,6 +305,26 @@ int main(int argc, char** argv) {
 
     auto turn_active = [&] { return transcript.turn_active(); };
 
+    // A proposal card's Approve/Reject buttons act here — the human consenting,
+    // same path as /approve. Runs on the UI thread; accept takes the turn lock, so
+    // guard it against an in-flight turn.
+    tv.set_proposal_action([&](const std::string& name, bool approve) {
+        if (!approve) {
+            transcript.notice(runtime.reject_proposal(name) ? "rejected `" + name + "`"
+                                                            : "no staged proposal `" + name + "`");
+            return;
+        }
+        if (turn_active()) {
+            transcript.notice("finish the current turn before approving");
+            return;
+        }
+        auto r = runtime.accept_proposal(name);
+        transcript.notice(r.has_value()
+                              ? "approved `" + r->name + "` (" + r->kind + ", " + r->risk +
+                                    " risk) — installed and pinned"
+                              : "could not approve `" + name + "`: " + r.error());
+    });
+
     // Pump runtime events onto the UI thread. The Closure applies the transcript
     // update on the UI thread (so no mutex is needed); the Event::Custom is what
     // actually triggers the redraw. FTXUI is event-driven, not reactive — a Closure
@@ -605,6 +625,7 @@ int main(int argc, char** argv) {
         if (body_sel == 0) {
             const int count = tv.count();
             constexpr int kHalfPage = 10;
+            const bool interactive = tv.selected_is_interactive();
             if (e == Event::Tab || e == Event::Escape) {
                 body_sel = 1; // back to input
             } else if (e == Event::ArrowUp || e == Event::Character("k")) {
@@ -619,6 +640,9 @@ int main(int argc, char** argv) {
                 tv.select(0);
             } else if (e == Event::End || e == Event::Character("G")) {
                 tv.select(count - 1);
+            } else if (interactive &&
+                       (e == Event::Return || e == Event::ArrowLeft || e == Event::ArrowRight)) {
+                return false; // let the proposal card's buttons take Enter / ← / →
             } else if (e == Event::Return || e == Event::Character(" ")) {
                 tv.toggle_selected();
             }
