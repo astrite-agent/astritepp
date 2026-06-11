@@ -10,12 +10,11 @@
 
 namespace astrite::tui {
 
-// A scrollable modal: a centered, bordered, solid-background panel over the live
-// view. The backdrop is darkened with `color()` rather than `dim` on purpose —
-// `dim` is an additive pixel flag, and `dbox` draws the panel on top without
-// clearing it, so `base | dim` would bleed the dim attribute onto the panel's
-// own border and text. `color()` sets the foreground, which the panel's own
-// cells overwrite, so the border composes cleanly.
+// A scrollable modal: a centered, bordered panel over a dimmed backdrop. The
+// idiom (the one FTXUI's own Modal uses) is `panel | clear_under | center`:
+// clear_under wipes the cells beneath the panel before it draws, so the dimmed
+// backdrop can't bleed its `dim` pixel flag onto the panel's border/text. That
+// lets us keep the real `base | dim` backdrop with a clean border.
 inline ftxui::Element modal_overlay(ftxui::Element base, const std::string& title,
                                     ftxui::Element content, float scroll,
                                     const std::string& footer) {
@@ -29,7 +28,7 @@ inline ftxui::Element modal_overlay(ftxui::Element base, const std::string& titl
             text(footer) | dim | hcenter,
         }) |
         border | bgcolor(Color::Black) | size(WIDTH, LESS_THAN, 92) | size(HEIGHT, LESS_THAN, 32);
-    return dbox({base | color(Color::GrayDark), panel | center});
+    return dbox({base | dim, panel | clear_under | center});
 }
 
 } // namespace astrite::tui

@@ -632,26 +632,40 @@ The view layer makes the loop-as-data bet a second time: **views are data too.**
 - **`view` components:** pure transforms from a typed value (a tool result, a status record) to a
   `UiTree`. Views declare `caps: []` and the loader enforces it — a view override therefore adds
   **no authority by construction**, so the trust review for a custom view is presentation-only.
-- **Frontends are `UiTree` interpreters.** The FTXUI TUI renders a tree as cells and cards; the
-  readline frontend renders the *same tree* as indented plain text. One view component serves
-  every frontend, including future ones. Frontends own focus, scrolling, selection, and the event
-  loop; none of that state appears in the tree.
+- **Frontends are `UiTree` interpreters; the interpreter is as rich as its toolkit.** A `UiTree`
+  is inert *description*. The interpreter is free to realize a node as a native toolkit
+  **component** where interaction helps (an FTXUI `Collapsible` for a foldable card, a `Menu` for
+  a selectable list, a `Button` for an affordance — getting mouse hit-testing and focus for free)
+  or as a plain DOM **element** where the content is static. The readline frontend realizes the
+  *same tree* as indented text. "Behavior is data" constrains the *data* (it stays inert,
+  capability-free description), not the *interpreter* (native code, full toolkit). One view
+  component serves every frontend; frontends own focus, scrolling, selection, and the event loop.
 - **Default views ship as embedded components** (generated constexpr IR, consteval-checked like
   everything else): tool-result cards, status lines, catalog entries. A tool component may name a
   custom view for its output; agent-proposed views arrive through the standard override → check →
   trust path (§7) — this is how agents design their own UI elements, safely.
-- **Chrome.** Approval prompts, trust cards, authority/risk diffs, and policy status are
-  kernel-rendered from kernel-owned data. Component views cannot produce, occlude, or restyle
-  them — the browser model: content draws inside its viewport; it never draws the address bar or
-  the permission prompt. Data that feeds a consent decision never flows through a view.
-- **Interaction stays kernel-owned.** `ui.action` is a named affordance ("key `r` → dispatch this
-  component with this value") that the frontend maps to a dispatch or runtime action. Components
-  never handle events, so totality holds: a view walk is one bounded tree transform.
+- **Chrome is enforced structurally, by tree ownership.** The frontend owns the root of its
+  component/element tree. View-emitted UI lives in a *subtree* the frontend mounts; when the
+  kernel needs consent — an "accept this component override" / authority-approval dialog — the
+  frontend detaches that subtree and mounts a **kernel-owned** modal at the root (a `Modal` stack,
+  or `DetachAllChildren` + re-`Add`). View data is in a different subtree entirely, so it cannot
+  produce, occlude, or restyle the consent dialog — the browser model (content never draws the
+  address bar), guaranteed by *where the node lives*, not by a rendering convention. Data that
+  feeds a consent decision never flows through a view.
+- **Affordances are inert names; behavior is bound by the interpreter under gating.** A `ui.action`
+  node only *names* an action ("rerun this") and a value. The interpreter wires the realizing
+  component's handler (a `Button` `on_click`, a `Menu` `on_enter`) to a runtime action **under the
+  frontend's gating policy** — the frontend decides whether and how each affordance fires. The
+  *view transform* stays total (value → inert `UiTree`, one bounded walk); the handler binding is
+  the interpreter's job, in native code, not the data's.
 - **Streaming stays events.** Deltas are kernel events rendered live by the frontend; views render
   *settled* values. A live stream is not a widget tree.
-- **What is refused:** cell/coordinate drawing, free colors, key handlers, layout arithmetic — an
-  imperative GUI toolkit in component data is the badly-designed-language trap, it breaks totality, and it
-  makes chrome spoofing trivial. The vocabulary stays semantic and small.
+- **What is refused — in the data, not the interpreter:** the `ui.*` *vocabulary* stays semantic
+  and small (no cell/coordinate drawing, no free colors, no key handlers, no layout arithmetic in
+  the data) — that is the badly-designed-language trap, it breaks totality, and it makes chrome
+  spoofing trivial. The *interpreter* may use the toolkit's full surface — components, animations,
+  mouse, the lot — because it is reviewed native code on the trusted side of the boundary. The
+  line is data-vs-interpreter, not DOM-vs-component.
 
 Concrete frontends:
 
