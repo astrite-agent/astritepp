@@ -85,6 +85,19 @@ TEST_CASE("view state: selection moves and clamps") {
     CHECK(v.selected() == 0);
 }
 
+TEST_CASE("view state: relative selection clamps (half-page jumps)") {
+    ViewState v;
+    v.focus_transcript(20); // selected = 19
+    v.select_relative(-10, 20);
+    CHECK(v.selected() == 9);
+    v.select_relative(-100, 20);
+    CHECK(v.selected() == 0);
+    v.select_relative(10, 20);
+    CHECK(v.selected() == 10);
+    v.select_relative(100, 20);
+    CHECK(v.selected() == 19);
+}
+
 TEST_CASE("view state: collapse toggles per segment and in bulk") {
     ViewState v;
     v.focus_transcript(4); // selected = 3

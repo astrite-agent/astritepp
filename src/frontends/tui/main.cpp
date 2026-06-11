@@ -424,15 +424,22 @@ int main(int argc, char** argv) {
     Component root = CatchEvent(view, [&](Event e) {
         // Modal open: scroll + close, swallow the rest.
         if (view_state.modal_open()) {
+            const bool half_down = e.input() == "\x04"; // Ctrl-D
+            const bool half_up = e.input() == "\x15";   // Ctrl-U
             if (e == Event::Escape || e == Event::Return || e == Event::Character("q")) {
                 view_state.close_modal();
-            } else if (e == Event::ArrowDown || e == Event::PageDown) {
+            } else if (e == Event::ArrowDown || e == Event::PageDown ||
+                       e == Event::Character("j")) {
                 modal_scroll = std::min(1.0f, modal_scroll + 0.12f);
-            } else if (e == Event::ArrowUp || e == Event::PageUp) {
+            } else if (e == Event::ArrowUp || e == Event::PageUp || e == Event::Character("k")) {
                 modal_scroll = std::max(0.0f, modal_scroll - 0.12f);
-            } else if (e == Event::Home) {
+            } else if (half_down) {
+                modal_scroll = std::min(1.0f, modal_scroll + 0.4f);
+            } else if (half_up) {
+                modal_scroll = std::max(0.0f, modal_scroll - 0.4f);
+            } else if (e == Event::Home || e == Event::Character("g")) {
                 modal_scroll = 0.0f;
-            } else if (e == Event::End) {
+            } else if (e == Event::End || e == Event::Character("G")) {
                 modal_scroll = 1.0f;
             }
             return true;
@@ -441,15 +448,20 @@ int main(int argc, char** argv) {
         // Transcript focus: segment navigation + collapse.
         if (view_state.focus() == at::Focus::transcript) {
             int count = seg_count();
+            constexpr int kHalfPage = 10;
             if (e == Event::Tab || e == Event::Escape) {
                 view_state.focus_input();
-            } else if (e == Event::ArrowUp) {
+            } else if (e == Event::ArrowUp || e == Event::Character("k")) {
                 view_state.select_prev(count);
-            } else if (e == Event::ArrowDown) {
+            } else if (e == Event::ArrowDown || e == Event::Character("j")) {
                 view_state.select_next(count);
-            } else if (e == Event::Home) {
+            } else if (e.input() == "\x15") { // Ctrl-U
+                view_state.select_relative(-kHalfPage, count);
+            } else if (e.input() == "\x04") { // Ctrl-D
+                view_state.select_relative(kHalfPage, count);
+            } else if (e == Event::Home || e == Event::Character("g")) {
                 view_state.select_first(count);
-            } else if (e == Event::End) {
+            } else if (e == Event::End || e == Event::Character("G")) {
                 view_state.select_last(count);
             } else if (e == Event::Return || e == Event::Character(" ")) {
                 view_state.toggle_collapse_selected();

@@ -42,6 +42,7 @@ public:
     void select_prev(int count) { set_selected(selected_ - 1, count); }
     void select_first(int count) { set_selected(0, count); }
     void select_last(int count) { set_selected(count - 1, count); }
+    void select_relative(int delta, int count) { set_selected(selected_ + delta, count); }
 
     [[nodiscard]] bool is_collapsed(int index) const { return collapsed_.contains(index); }
     void toggle_collapse_selected() {
