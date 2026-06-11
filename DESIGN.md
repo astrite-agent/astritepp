@@ -38,10 +38,13 @@ M5 runtime done, M6 loop-as-data done (constexpr-IR codegen pending), M7 fs tool
 plane (`.astrite/`) is reserved from model writes, `component.check`/`catalog` inspect, SHA-256
 hash-pinned trust records gate disk components at load, and the propose → accept flow
 (`component.propose` → human `accept_proposal`) lets a model grow its own verbs/components only
-with reviewed consent. Ahead: M3 confined loader (the loader still runs in-process — a parser bug
-is a host crash, not a confined one), M8 UiTree-as-data (a rich FTXUI TUI scaffold exists; the
-root-owned consent modal is pending), and the rest of M9 (baseline diffs in the check report,
-richer policy modes). Sections describing unbuilt work are marked **[planned]** / **[PHASE 2]**.
+with reviewed consent. **M8's TUI is well underway**: the transcript is literal focusable FTXUI
+components with FTXUI-managed focus, interactive proposal cards (Approve/Reject buttons), and a
+typed transcript persisted/restored across sessions; the `UiTree`/`ui.*`-as-data interpreter is the
+remaining M8 step. Ahead: M3 confined loader (the loader still runs in-process — a parser bug is a
+host crash, not a confined one), the M8 `UiTree` interpreter, and the rest of M9 (baseline diffs in
+the check report, richer policy modes). Sections describing unbuilt work are marked **[planned]** /
+**[PHASE 2]**.
 
 ## 1. Why C++?
 
@@ -729,10 +732,20 @@ Concrete frontends:
 - **v0: readline.** `stdin` line loop + streamed deltas to stdout + tool activity lines, consuming
   the runtime event channel. The end-to-end proof vehicle, not a throwaway: it later gains the
   plain-text `UiTree` renderer and stays.
-- **TUI: FTXUI** (vendored, itself zero-dependency), built as a `UiTree` interpreter from day one —
-  follow-tail scrollback, wrapping input, selectable/collapsible transcript segments, slash
-  commands, kernel-chrome trust/approval surfaces. Unidirectional state + `update`/`view`; no
-  business logic in the renderer. A raw-ANSI floor is the fallback if FTXUI disappoints.
+- **TUI: FTXUI** (vendored, itself zero-dependency). **Built:** the transcript is now **literal
+  focusable FTXUI components** (`TranscriptView` — a `Container` of segment components folded from
+  the pure `Transcript`), with FTXUI-managed focus throughout: a body selector routes input ↔
+  transcript, the container's selector picks the focused segment, and focus descends into a card's
+  sub-widgets. Cursor visibility/scroll-to-focus/click-to-focus are FTXUI's (the empty-input cursor
+  is supplied via FTXUI's own `transform` hook, since its `Input` draws none for empty content, and
+  it works because focus is real). **Interactive cards:** a proposal segment hosts real
+  Approve/Reject `Button`s (←/→/Enter/click), running the consent path and then showing
+  ✓/✗ in-place. Plus follow-tail scrollback, wrapping multi-line input with readline editing +
+  history + reverse-search, a slash-command completion popup, scrollable help/commands/status
+  modals, a `/config` checkbox modal, a token-usage gauge, and kernel-chrome consent surfaces. The
+  full `UiTree`-as-data interpreter (components emitting `ui.*` trees) is the remaining M8 step;
+  the component-transcript is its substrate. Unidirectional state; no business logic in the
+  renderer. A raw-ANSI floor is the fallback if FTXUI disappoints.
 
 ## 11. Config, sessions, components on disk
 
@@ -751,9 +764,15 @@ Concrete frontends:
   crash, not a confined one — M3 confined-loader child).
 - **Proposals & trust:** `.astrite/proposals/` holds staged candidates awaiting review;
   `.astrite/trust/<name>.json` holds the hash-pinned approvals. Both are kernel-written only.
-- **Sessions:** append-only JSONL at `.astrite/sessions/current.jsonl` — the event-sourced
-  transcript the `turn` component reads and appends to. Line-indexed reader and `tail`/`range`
-  facade for transcript windows; per-id sessions and resume later.
+- **Sessions:** append-only JSONL at `.astrite/sessions/current.jsonl` — the **LLM message log**
+  (exact role/content + tool-call structure) the `turn` component reads and appends to, and the
+  source of the model's restored context. The **rendered UI transcript** is persisted separately at
+  `.astrite/sessions/current.transcript.jsonl` as typed segment records (every kind — user,
+  assistant, tool card, error, proposal card with its resolution, notice); the TUI rewrites it on
+  each settled change and restores it on open, so a reopened client shows the prior conversation
+  cards-and-all. The two are kept distinct on purpose: the message log carries structure the UI
+  doesn't, the transcript carries rendering the model doesn't. Line-indexed reader + `tail`/`range`
+  facade for the message log; per-id sessions and resume later.
 
 ## 12. Tech baseline
 
@@ -876,7 +895,7 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
 | M5 | Runtime: effect prims, registry, events, turn execution | the wiring |
 | M6 | **Loop-as-data**: embedded `turn.json` (consteval-checked) + readline frontend, live end-to-end | **the central bet** |
 | M7 | fs/search primitives ✓ + **check-only `task.run`** ✓ (declared verbs, confined, structured results; there is no shell) — transactions/holes/`produce` + `fs.delete/mkdir/rename` pending | a useful agent with enumerable execution |
-| M8 | UI-as-data (`UiTree`, `ui.*`, `view` kind) + FTXUI TUI as tree interpreter | the view layer is data too |
+| M8 | UI-as-data + FTXUI TUI. **Built:** literal-component transcript (FTXUI focus), interactive proposal cards, typed transcript persistence/restore. **Pending:** the `UiTree`/`ui.*`/`view`-kind interpreter (components emitting their own UI) | the view layer is data too |
 | M9 | Trust & self-modification ✓ (built end to end): control-plane reservation, `component.check`/`catalog`, SHA-256 trust records + load gate, `component.propose` → human accept (kernel installs + pins). Override/check baseline diffs + TUI consent modal pending | the authority story; agents grow their own verbs, reviewably |
 | M10 | Polish: config, sessions/resume, packaging | |
 | P2 | MCP client, native non-OpenAI providers | **[PHASE 2]** |

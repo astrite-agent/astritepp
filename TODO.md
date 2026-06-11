@@ -311,13 +311,33 @@ argv holes are the remaining M7 work; see the deferred items below.*
 - [x] **Render-loop bug found+fixed (2026-06-11)**: FTXUI is event-driven, not reactive — a
       `Closure` task runs but does NOT invalidate the frame; only Event/AnimationTask do (proven
       with a render-counting harness). Out-of-band updates must `PostEvent(Event::Custom)`.
-- [ ] **Interactive-component hosting (Collapsible cards, completion as a focusable widget, config
-      Checkboxes)** — all need a root-`Container` + FTXUI-managed-focus rearchitecture, which is the
-      M8 UiTree-interpreter shape. Assessed (2026-06-11) as a focused effort, not a bolt-on onto the
-      single-`Renderer`+`CatchEvent` model. **Finding:** the completion popup as a `Menu` is a
-      *non-improvement* — a `Menu` wants focus while the user types in the `Input`; the current
-      DOM autocomplete (Input focused + manual selected-index + rendered list) is the idiomatic
-      pattern for autocomplete-under-input, like `Input` itself being the one component worth using.
+- [x] **Literal-component transcript + FTXUI focus, 2026-06-11**: the transcript is a real
+      `Container::Vertical` of focusable segment components (`TranscriptView`), folded from the pure
+      `Transcript`. FTXUI manages focus end to end — a body selector routes input ↔ transcript, the
+      container's selector picks the focused segment (accent via the focusable `Renderer`'s
+      `Focused()`), focus descends into a card's sub-widgets; vi-nav drives the selector;
+      Enter/space collapse; click-to-focus+collapse (per-segment `reflect` box); native
+      scroll-to-focus (`| focus`) in transcript mode, manual scroll otherwise. Off-screen
+      component tests (`tui_component_test.cpp`) + pty smokes. `ViewState` trimmed to modal-only
+      (dead code removed).
+- [x] **Cursor-via-focus, 2026-06-11**: confirmed FTXUI's `Input` draws no cursor for empty
+      content (its `OnRender` empty branch skips the cursor decorator), so the empty-box cursor
+      comes from FTXUI's own `transform` hook keyed on real `Focused()`. The Container focus model
+      makes the input genuinely focused, so the cursor shows when empty — verified off-screen
+      (`BarBlinking` when focused, `Hidden` when not) and live (`ESC[5 q` + `ESC[?25h` at startup).
+- [x] **Interactive proposal cards, 2026-06-11**: a proposal segment hosts real Approve/Reject
+      `Button`s — ←/→/Enter/click run the consent path (`accept_proposal`/`reject_proposal`), then
+      the card shows ✓ approved / ✗ rejected in-place. The first segment hosting live sub-widgets;
+      the pattern the `UiTree` interpreter generalizes.
+- [x] **Typed transcript persistence/restore, 2026-06-11** (`transcript_io.hpp`): the full UI
+      transcript — every segment kind incl. cards (with resolution), errors, notices — persists as
+      JSONL to `.astrite/sessions/current.transcript.jsonl` and restores on open, so a reopened
+      client shows the prior conversation. Kept separate from the LLM message log (which carries the
+      model's tool-call structure the UI lacks). Streaming (not-done) segments aren't persisted;
+      corrupt/blank lines are skipped on load.
+- [x] **Finding (2026-06-11):** the completion popup as a `Menu` is a *non-improvement* — a `Menu`
+      wants focus while the user types in the `Input`; the DOM autocomplete (Input focused + manual
+      selected-index + rendered list) is the idiomatic autocomplete-under-input pattern, kept.
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,
