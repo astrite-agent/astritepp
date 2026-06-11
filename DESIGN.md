@@ -1,6 +1,7 @@
 # astrite++ — Design
 
-> **Status:** Design target. Nothing is built yet; [TODO.md](TODO.md) is the build order.
+> **Status:** Design target. Much of the core is built (see §0); [TODO.md](TODO.md) is the
+> source of truth for exactly what exists today.
 >
 > **What this is:** a secure, fast, flexible coding agent in modern C++ (C++23 floor, C++26
 > trajectory). No dynamic-language runtime, no plugin loader, **and no executable extension code
@@ -22,17 +23,21 @@
 **Built and working — not greenfield.** The kernel (Value, the JSONC loader, the blackboard, the
 exhaustive-visit evaluator, the authority fold), the Linux sandbox floor (`no_new_privs → seccomp
 → Landlock` via native syscalls), the OpenAI-compatible streaming client, the frontend-agnostic
-runtime, the **loop-as-data `turn` running live end-to-end**, sandboxed `fs.read/list/write/edit` +
-`search.find` tools, the `path.resolve`/`json.coerce` trust pair, and two frontends (a readline
+runtime, the **loop-as-data `turn` running live end-to-end**, the sandboxed fs tools
+(`fs.read` with line-range reads, `fs.list`, `fs.write`, `fs.edit`) and `search.find`,
+**`task.run` — confined declared-verb execution with structured results (the check-only slice of
+"tasks, not a shell")**, the `path.resolve`/`json.coerce` trust pair, and two frontends (a readline
 frontend and an FTXUI TUI) are implemented and tested.
 
 The rest of this document is the design *target*; **[TODO.md](TODO.md) is the source of truth for
 exactly what exists today.** In milestone terms (see §17): M0 partial (toolchain/vendoring/flags
 done; CI + release hardening pending), M1 sandbox floor done, M2 kernel done, M4 LLM client done,
-M5 runtime done, M6 loop-as-data done (constexpr-IR codegen pending), M7 fs tools done
-(tasks/transactions + delete/mkdir/rename pending). Ahead: M3 confined loader (disk overrides load
-in-process and un-gated today), M8 UiTree-as-data (a rich FTXUI TUI scaffold exists), M9
-trust/self-modification. Sections describing unbuilt work are marked **[planned]** / **[PHASE 2]**.
+M5 runtime done, M6 loop-as-data done (constexpr-IR codegen pending), M7 fs tools + the
+**check-only `task.run`** done (transactions/scratch/promotion, typed argv holes, and
+`fs.delete/mkdir/rename` pending). Ahead: M3 confined loader (disk overrides + repo-local
+components load in-process and un-gated today), M8 UiTree-as-data (a rich FTXUI TUI scaffold
+exists), M9 trust/self-modification. Sections describing unbuilt work are marked **[planned]** /
+**[PHASE 2]**.
 
 ## 1. Why C++?
 
@@ -416,7 +421,7 @@ component's granted capability set, and **executes inside a sandbox child (§7 g
 |---|---|---|
 | `fs.read` / `fs.list` / `fs.write` / `fs.edit` / `fs.delete` / `fs.rename` / `fs.mkdir` / `fs.stat` | ReadOnly/Write | `path` is a `PathRef@base` — relative-by-type, rooted at a granted base anchor. `fs.list` returns bounded, sorted entries and does not follow symlinks; `fs.edit` is exact-match replacement with expected match counts; `fs.delete` is non-recursive; `fs.rename` rejects existing targets; 4 MiB read/write caps |
 | `search.find` | ReadOnly | bounded sorted workspace text search; literal or linear-time regex (RE2-class, never backtracking); skips symlinks and generated/private state |
-| `task.run` | TaskRun | the **only** execution primitive — `dispatch`'s twin (see *Execution: tasks, not a shell*, below). Resolves a verb against the statically-known task-component table; parameters bind into typed, shape-validated holes as discrete argv elements. Transactional by default: task-scoped scratch, no network unless declared, settles to `{status, output, delta}` |
+| `task.run` | TaskRun | the **only** execution primitive — `dispatch`'s twin (see *Execution: tasks, not a shell*, below). Resolves a verb against the statically-known task-component table; parameters bind into typed, shape-validated holes as discrete argv elements. Transactional by default: task-scoped scratch, no network unless declared, settles to `{status, output, delta}`. **Built (check-only):** confined fork+exec of a pinned argv, read on workspace+system / write on declared subtrees, net-deny, captured+capped stdout/stderr, timeout, structured `{status, code, stdout, stderr, timed_out}`. **Planned:** typed argv holes, scratch/CoW transactions + `produce` promotion |
 | `llm.stream` | Network | kernel owns the SSE fold + index-keyed tool-call accumulation; leaf settles one `{text, tool_calls, finish, usage}` per tick |
 | `http.fetch` | Network | **later**; host/scheme allowlist; size/time caps; counts toward lethal-trifecta |
 | `session.append` / `session.read` / `session.fold` | Write/ReadOnly | append-only JSONL; `fold` is a kernel-driven cursor fold for resuming sessions larger than the blackboard |
@@ -503,6 +508,20 @@ bounded job/handle story is deliberately punted (§18). Lineage, for the record:
 designation (authority by naming, no ambient verbs) plus Bazel/Nix hermetic-action discipline,
 applied to an agent.
 
+> **Status — what's built (the check-only slice).** A `task` component carries an inert `task`
+> block (`argv`/`cwd`/`effect`/`net`/`writable`/`timeout_ms`/`output_cap_bytes`); the loader
+> desugars it to a pinned `{do: "task.run", with: {spec}, as: "out"}` action, so it walks like
+> every other component. argv is embedded as a literal, which *structurally* forbids `{ref}` holes
+> (the strongest form of "select, never compose" — there are no holes to inject into yet). The
+> `task.run` effect confines the run via `sandbox::run_task` (fork+exec under the same floor),
+> grants write only on declared `writable` subtrees, and returns a structured
+> `{status, code, stdout, stderr, timed_out, …}` value — a non-zero exit or failed spawn is a
+> *result the model reads*, not a walk error. Task components surface to the model as callable
+> verbs (empty arg schema). Repo-local verbs load from `.astrite/components/`. **Deferred to later
+> in M7 / M9:** typed argv holes + the pinned-`--` grammar, CoW scratch transactions and `produce`
+> promotion (today a `check` task runs in the live workspace, writing only its declared subtrees),
+> network relaxation, and project-type task auto-proposal.
+
 ## 7. Capability & authority model — and the ground truth
 
 Two layers; do not confuse them.
@@ -562,8 +581,11 @@ code at all**:
   artifact, one trust root); `task.run` applies the policy in the forked child before `execve`.
 - **Landlock:** ruleset built at ABI **V1** for fs and **V4** for net, derived from the granted
   base anchors; a read-exec set for toolchain/system dirs (`/usr`, `/lib`, `/lib64`, `/bin`,
-  `/sbin`, `/etc`, existing entries only); essential devices (`/dev/null`, …); everything else
-  denied. Child network is **deny-all** — only the kernel talks to the model endpoint.
+  `/sbin`, `/etc`, existing entries only); everything else denied. `task.run` additionally grants
+  read+write on `/dev` (DAC remains the backstop — a non-root task still cannot open block devices
+  or `/dev/mem`; only world-accessible nodes like `/dev/null` work), which real build tools need:
+  ninja's `posix_spawn` redirects child stdin from `/dev/null`, and compilers `-o /dev/null` in
+  feature checks. Child network is **deny-all** — only the kernel talks to the model endpoint.
 - **seccomp:** the BPF program is a **`constexpr std::array<sock_filter, N>`**, hand-assembled and
   length-checked at compile time. Default action **`EPERM`** (friendlier tool error reporting);
   the v0 filter denies `AF_INET`/`AF_INET6` socket creation; a full default-deny allowlist is the
@@ -695,8 +717,11 @@ Concrete frontends:
   `ASTRITE_AUTHORITY_POLICY`); TOML at the platform config dir + per-project `.astrite/` later.
 - **Components:** the default agent ships as embedded built-in components (generated constexpr IR);
   users override them under `.astrite/components/<name>.json` (disk override preferred — this is
-  what makes the loop hot-swappable). Overrides go through the confined loader + authority fold +
-  trust gate.
+  what makes the loop hot-swappable). A file there whose name is *not* an embedded default is
+  loaded as a **new** component (repo-local task verbs today, e.g. `build`/`test`). Overrides and
+  new components go through the confined loader + authority fold + trust gate. *Built today:* they
+  load in-process and un-gated, fail-closed on parse/name-mismatch, and announce themselves on
+  stderr ("trust gate arrives at M9"); the confined loader (M3) and trust gate (M9) are pending.
 - **Sessions:** append-only JSONL at `.astrite/sessions/current.jsonl` — the event-sourced
   transcript the `turn` component reads and appends to. Line-indexed reader and `tail`/`range`
   facade for transcript windows; per-id sessions and resume later.
@@ -821,7 +846,7 @@ Summary — the full checklist lives in [TODO.md](TODO.md).
 | M4 | LLM client: curl SSE + tool-call accumulation | streaming sharp edge handled |
 | M5 | Runtime: effect prims, registry, events, turn execution | the wiring |
 | M6 | **Loop-as-data**: embedded `turn.json` (consteval-checked) + readline frontend, live end-to-end | **the central bet** |
-| M7 | fs/search primitives + **tasks & transactions** (`task.run`; there is no shell) | a useful agent with enumerable execution |
+| M7 | fs/search primitives ✓ + **check-only `task.run`** ✓ (declared verbs, confined, structured results; there is no shell) — transactions/holes/`produce` + `fs.delete/mkdir/rename` pending | a useful agent with enumerable execution |
 | M8 | UI-as-data (`UiTree`, `ui.*`, `view` kind) + FTXUI TUI as tree interpreter | the view layer is data too |
 | M9 | Trust & self-modification: `component.check`/`catalog`, override diffs, trust records, custom-view + task-proposal acceptance | the authority story complete; agents design their own UI and verbs |
 | M10 | Polish: config, sessions/resume, packaging | |

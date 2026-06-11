@@ -24,7 +24,7 @@ Target — hold this line; every addition is a reviewed diff:
 | JSON / model output | `glaze` (same lib) | header-only, zero-dep, exception-free |
 | HTTP / TLS / SSE | **system libcurl** | trust class of libc; not vendored, not counted |
 | TUI (M8) | `ftxui` (vendored) | itself zero-dep; raw-ANSI floor is the fallback |
-| tests (dev-only) | Catch2 amalgamated *or* doctest | open decision |
+| tests (dev-only) | **doctest** 2.5.2 (vendored) | decided; amalgamated, header-only |
 
 ---
 
@@ -180,9 +180,11 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       is configure-time strings (gen_components consteval IR + static_assert still open);
       overrides load un-gated with a loud stderr warning until M9.
 
-## M7 — Real tools under the sandbox: fs/search + tasks & transactions
+## M7 — Real tools under the sandbox: fs/search + tasks (check-only slice done)
 
-*The second bet (no shell — DESIGN §6) starts collecting evidence here.*
+*The second bet (no shell — DESIGN §6) is now live: the model selects declared task verbs and
+the kernel runs them confined. The transaction/promotion half (scratch CoW, `produce`) and typed
+argv holes are the remaining M7 work; see the deferred items below.*
 
 - [x] `path.resolve` + `json.coerce` — the trust-boundary pair (M7a, pure zero-cap prims).
 - [x] **Self-re-exec delivery (M1's deferred item), done M7b**: hidden `__sbx` subcommand;
