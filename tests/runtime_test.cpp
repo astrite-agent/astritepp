@@ -1,7 +1,9 @@
 #include <doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <vector>
@@ -9,6 +11,8 @@
 #include "embedded_components.hpp"
 #include "runtime/fs_read_args.hpp"
 #include "runtime/runtime.hpp"
+#include "runtime/task_args.hpp"
+#include "sandbox/sandbox.hpp"
 #include "runtime/session.hpp"
 #include "schema/load.hpp"
 #include "schema/value_json.hpp"
@@ -29,6 +33,117 @@ Value with_range(std::optional<std::int64_t> offset, std::optional<std::int64_t>
     return v;
 }
 } // namespace
+
+namespace {
+Value str_list(std::initializer_list<const char*> xs) {
+    Value::List v;
+    for (const char* x : xs) {
+        v.push_back(Value::str(x));
+    }
+    return Value::list(std::move(v));
+}
+} // namespace
+
+TEST_CASE("task spec: a valid check spec maps argv, root cwd, and read bases") {
+    Value spec = Value::object();
+    spec.set("argv", str_list({"ctest", "--test-dir", "build"}));
+    auto built = runtime::build_task_spec(spec, "/work/ws");
+    REQUIRE(built.has_value());
+    CHECK(built->argv == std::vector<std::string>{"ctest", "--test-dir", "build"});
+    CHECK(built->cwd == fs::path("/work/ws"));            // default cwd == workspace root
+    CHECK(built->write_paths.empty());                    // a pure check writes nothing
+    // read bases always include the workspace root (plus system toolchain dirs).
+    CHECK(std::find(built->read_paths.begin(), built->read_paths.end(), fs::path("/work/ws")) !=
+          built->read_paths.end());
+    CHECK(built->timeout_ms > 0);
+    CHECK(built->output_cap > 0);
+}
+
+TEST_CASE("task spec: cwd and writable subtrees are confined under the workspace") {
+    Value spec = Value::object();
+    spec.set("argv", str_list({"cmake", "--build", "build"}));
+    spec.set("cwd", Value::str("workspace"));
+    spec.set("writable", str_list({"build"}));
+    auto built = runtime::build_task_spec(spec, "/work/ws");
+    REQUIRE(built.has_value());
+    CHECK(built->write_paths == std::vector<fs::path>{fs::path("/work/ws/build")});
+}
+
+TEST_CASE("task spec: timeout and output cap are read and clamped to ceilings") {
+    Value spec = Value::object();
+    spec.set("argv", str_list({"true"}));
+    spec.set("timeout_ms", Value::integer(10'000'000)); // above the 600s ceiling
+    spec.set("output_cap_bytes", Value::integer(99'999'999));
+    auto built = runtime::build_task_spec(spec, "/work/ws");
+    REQUIRE(built.has_value());
+    CHECK(built->timeout_ms == static_cast<int>(runtime::kTaskMaxTimeoutMs));
+    CHECK(built->output_cap == runtime::kTaskMaxOutputCap);
+}
+
+TEST_CASE("task spec: malformed argv is rejected") {
+    Value empty = Value::object();
+    empty.set("argv", Value::list({}));
+    CHECK_FALSE(runtime::build_task_spec(empty, "/work/ws").has_value());
+
+    Value notstr = Value::object();
+    Value::List mixed;
+    mixed.push_back(Value::str("cmake"));
+    mixed.push_back(Value::integer(7));
+    notstr.set("argv", Value::list(std::move(mixed)));
+    CHECK_FALSE(runtime::build_task_spec(notstr, "/work/ws").has_value());
+
+    Value missing = Value::object();
+    CHECK_FALSE(runtime::build_task_spec(missing, "/work/ws").has_value());
+}
+
+TEST_CASE("task spec: a path escape in cwd or writable is rejected") {
+    Value bad_cwd = Value::object();
+    bad_cwd.set("argv", str_list({"true"}));
+    bad_cwd.set("cwd", Value::str("../etc"));
+    CHECK_FALSE(runtime::build_task_spec(bad_cwd, "/work/ws").has_value());
+
+    Value bad_w = Value::object();
+    bad_w.set("argv", str_list({"true"}));
+    bad_w.set("writable", str_list({"../../etc"}));
+    CHECK_FALSE(runtime::build_task_spec(bad_w, "/work/ws").has_value());
+}
+
+TEST_CASE("task spec: net access is rejected for now (deferred)") {
+    Value spec = Value::object();
+    spec.set("argv", str_list({"true"}));
+    spec.set("net", Value::boolean(true));
+    CHECK_FALSE(runtime::build_task_spec(spec, "/work/ws").has_value());
+}
+
+TEST_CASE("task result: status derives from spawn/exit/timeout") {
+    sandbox::TaskResult passed;
+    passed.spawned = true;
+    passed.code = 0;
+    passed.out = "ok\n";
+    CHECK(*runtime::task_result_value(passed).get("status") == Value::str("passed"));
+    CHECK(*runtime::task_result_value(passed).get("stdout") == Value::str("ok\n"));
+    CHECK(*runtime::task_result_value(passed).get("code") == Value::integer(0));
+
+    sandbox::TaskResult failed;
+    failed.spawned = true;
+    failed.code = 1;
+    failed.err = "boom";
+    CHECK(*runtime::task_result_value(failed).get("status") == Value::str("failed"));
+    CHECK(*runtime::task_result_value(failed).get("stderr") == Value::str("boom"));
+
+    sandbox::TaskResult to;
+    to.spawned = true;
+    to.code = -9;
+    to.timed_out = true;
+    CHECK(*runtime::task_result_value(to).get("status") == Value::str("timed_out"));
+
+    sandbox::TaskResult nospawn;
+    nospawn.spawned = false;
+    nospawn.spawn_error = "task: exec failed";
+    Value v = runtime::task_result_value(nospawn);
+    CHECK(*v.get("status") == Value::str("error"));
+    CHECK(*v.get("error") == Value::str("task: exec failed"));
+}
 
 TEST_CASE("fs.read range spec: absent / zero range means whole file (empty spec)") {
     CHECK(*runtime::read_range_spec(Value::object()) == "");

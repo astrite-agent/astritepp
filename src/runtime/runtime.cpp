@@ -9,6 +9,7 @@
 #include "kernel/trust.hpp"
 #include "llm/client.hpp"
 #include "runtime/fs_read_args.hpp"
+#include "runtime/task_args.hpp"
 #include "sandbox/sandbox.hpp"
 
 namespace astrite::runtime {
@@ -211,6 +212,23 @@ void Runtime::register_effects() {
                                                                             : r.output});
             }
             return Value::str(std::move(r.output));
+        });
+    registry_.add_effect(
+        "task.run", "task.run",
+        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+            // The spec is component-authored and pinned; the model selects the
+            // verb, never the argv. A malformed spec is a hard error; a task that
+            // merely *fails* (non-zero exit) or cannot spawn is a structured
+            // result the model reads and adapts to, not a walk error.
+            const Value* spec = args.get("spec");
+            if (spec == nullptr) {
+                return std::unexpected(kernel::KernelError{"task.run: missing `spec`"});
+            }
+            auto ts = build_task_spec(*spec, base);
+            if (!ts.has_value()) {
+                return std::unexpected(ts.error());
+            }
+            return task_result_value(sandbox::run_task(*ts));
         });
 
     registry_.add_effect(
