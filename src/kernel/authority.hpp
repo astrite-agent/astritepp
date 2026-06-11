@@ -24,6 +24,28 @@ struct AuthorityTrace {
     std::vector<std::string> reached; // sorted capability ids
 };
 
+// A single risk tier for a set of reached capabilities, worst-first. Drives the
+// consent card's headline ("adds the ability to … — approve?") and any policy
+// that gates by tier. Pure and total.
+[[nodiscard]] inline std::string risk_tier(const std::vector<std::string>& caps) {
+    auto has = [&](std::string_view c) {
+        return std::find(caps.begin(), caps.end(), c) != caps.end();
+    };
+    if (has("llm.stream") || has("http.fetch") || has("net")) {
+        return "network";
+    }
+    if (has("task.run") || has("subagent.spawn")) {
+        return "exec";
+    }
+    for (const std::string& c : caps) {
+        if (c == "fs.write" || c == "fs.edit" || c == "fs.delete" || c == "fs.rename" ||
+            c == "fs.mkdir" || c == "session.append") {
+            return "write";
+        }
+    }
+    return caps.empty() ? "none" : "read";
+}
+
 namespace detail {
 
 inline std::expected<void, KernelError> collect_caps(const schema::Node& node,
@@ -32,6 +54,10 @@ inline std::expected<void, KernelError> collect_caps(const schema::Node& node,
     auto leaf = [&](const std::string& primitive) -> std::expected<void, KernelError> {
         if (primitive == "dispatch") {
             reached.insert("dispatch");
+            return {};
+        }
+        // Zero-cap inspection builtins: recognized by the fold, grant nothing.
+        if (primitive == "component.check" || primitive == "component.catalog") {
             return {};
         }
         if (!reg.has(primitive)) {

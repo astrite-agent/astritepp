@@ -38,6 +38,11 @@ struct Fixture {
             calls.push_back(tag ? *tag : "?");
             return Value();
         });
+        // A capability-bearing effect so component.check can report reached/risk.
+        reg.add_effect("fs.write", "fs.write",
+                       [](const Value&) -> std::expected<Value, kernel::KernelError> {
+                           return Value();
+                       });
     }
 };
 
@@ -66,6 +71,68 @@ TEST_CASE("action resolves args, invokes the primitive, and binds the result") {
     CHECK(*s == Status::success);
     REQUIRE(f.bb.get("out") != nullptr);
     CHECK(*f.bb.get("out")->get("a") == Value::integer(7));
+}
+
+TEST_CASE("component.catalog lists the loaded components, sorted") {
+    Fixture f;
+    Component a;
+    a.name = "alpha";
+    a.kind = "tool";
+    a.caps = {"fs.read"};
+    a.description = "reads files";
+    Component b;
+    b.name = "beta";
+    b.kind = "task";
+    b.caps = {"task.run"};
+    f.components.emplace("alpha", std::move(a));
+    f.components.emplace("beta", std::move(b));
+
+    REQUIRE(walk(action("component.catalog", {}, "out"), f.bb, f.ctx).has_value());
+    const Value* list = f.bb.get("out")->get("components");
+    REQUIRE(list != nullptr);
+    REQUIRE(list->as_list() != nullptr);
+    REQUIRE(list->as_list()->size() == 2);
+    CHECK(*(*list->as_list())[0].get("name") == Value::str("alpha"));
+    CHECK(*(*list->as_list())[0].get("kind") == Value::str("tool"));
+    CHECK(*(*list->as_list())[0].get("description") == Value::str("reads files"));
+    CHECK(*(*list->as_list())[1].get("name") == Value::str("beta"));
+}
+
+TEST_CASE("component.check validates a good candidate and reports its authority") {
+    Fixture f;
+    const std::string src = R"({"component":"w","kind":"tool","caps":["fs.write"],
+      "tree":{"do":"fs.write"},"output":{"ref":"x"}})";
+    REQUIRE(walk(action("component.check", args1("source", ArgValue{Value::str(src)}), "out"), f.bb,
+                 f.ctx)
+                .has_value());
+    const Value* out = f.bb.get("out");
+    REQUIRE(out != nullptr);
+    CHECK(*out->get("ok") == Value::boolean(true));
+    CHECK(*out->get("name") == Value::str("w"));
+    CHECK(*out->get("kind") == Value::str("tool"));
+    CHECK(*out->get("risk") == Value::str("write"));
+    REQUIRE(out->get("reached")->as_list() != nullptr);
+    REQUIRE(out->get("reached")->as_list()->size() == 1);
+    CHECK((*out->get("reached")->as_list())[0] == Value::str("fs.write"));
+}
+
+TEST_CASE("component.check reports malformed source and undeclared authority as ok:false") {
+    Fixture f;
+    REQUIRE(walk(action("component.check", args1("source", ArgValue{Value::str("{ not json")}),
+                        "bad"),
+                 f.bb, f.ctx)
+                .has_value());
+    CHECK(*f.bb.get("bad")->get("ok") == Value::boolean(false));
+    REQUIRE(f.bb.get("bad")->get("errors") != nullptr);
+
+    // reaches fs.write but declares no caps — the fold rejects it
+    const std::string undeclared = R"({"component":"w","kind":"tool","caps":[],
+      "tree":{"do":"fs.write"},"output":{"ref":"x"}})";
+    REQUIRE(walk(action("component.check", args1("source", ArgValue{Value::str(undeclared)}),
+                        "u"),
+                 f.bb, f.ctx)
+                .has_value());
+    CHECK(*f.bb.get("u")->get("ok") == Value::boolean(false));
 }
 
 TEST_CASE("action without bind leaves the blackboard untouched") {

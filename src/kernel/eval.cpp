@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "kernel/authority.hpp"
+#include "schema/load.hpp"
 #include "schema/value_json.hpp"
 #include "util/overloaded.hpp"
 
@@ -91,9 +92,78 @@ std::expected<Value, KernelError> dispatch(const Value& args, const Context& ctx
     return result;
 }
 
+// component.check: validate + authority-fold a candidate component (as a JSONC
+// string) WITHOUT installing it — the model inspects what it drafted before
+// proposing. Pure, zero-cap, never errors the walk: a bad candidate reports
+// {ok:false, errors}, a good one {ok:true, name, kind, caps, reached, risk}.
+std::expected<Value, KernelError> component_check(const Value& args, const Context& ctx) {
+    const Value* src = args.get("source");
+    if (src == nullptr || src->as_str() == nullptr) {
+        return std::unexpected(KernelError{"component.check: `source` must be a string"});
+    }
+    Value out = Value::object();
+    auto comp = schema::load_component_jsonc(*src->as_str());
+    if (!comp.has_value()) {
+        out.set("ok", Value::boolean(false));
+        out.set("errors", Value::list({Value::str(comp.error().message)}));
+        return out;
+    }
+    out.set("name", Value::str(comp->name));
+    out.set("kind", Value::str(comp->kind));
+    Value::List declared;
+    for (const std::string& c : comp->caps) {
+        declared.push_back(Value::str(c));
+    }
+    out.set("caps", Value::list(std::move(declared)));
+
+    auto trace = check_component_authority(*comp, *ctx.primitives);
+    if (!trace.has_value()) {
+        out.set("ok", Value::boolean(false));
+        out.set("errors", Value::list({Value::str(trace.error().message)}));
+        return out;
+    }
+    Value::List reached;
+    for (const std::string& c : trace->reached) {
+        reached.push_back(Value::str(c));
+    }
+    out.set("reached", Value::list(std::move(reached)));
+    out.set("risk", Value::str(risk_tier(trace->reached)));
+    out.set("ok", Value::boolean(true));
+    return out;
+}
+
+// component.catalog: the live affordance set — every loaded component with its
+// kind, caps, and description. Lets the model orient itself before composing.
+std::expected<Value, KernelError> component_catalog(const Value&, const Context& ctx) {
+    Value::List items;
+    for (const auto& [name, comp] : *ctx.components) {
+        Value e = Value::object();
+        e.set("name", Value::str(comp.name));
+        e.set("kind", Value::str(comp.kind));
+        if (comp.description.has_value()) {
+            e.set("description", Value::str(*comp.description));
+        }
+        Value::List caps;
+        for (const std::string& c : comp.caps) {
+            caps.push_back(Value::str(c));
+        }
+        e.set("caps", Value::list(std::move(caps)));
+        items.push_back(std::move(e));
+    }
+    Value out = Value::object();
+    out.set("components", Value::list(std::move(items)));
+    return out;
+}
+
 std::expected<Value, KernelError> invoke(const std::string& name, Value args, const Context& ctx) {
     if (name == "dispatch") {
         return dispatch(args, ctx);
+    }
+    if (name == "component.check") {
+        return component_check(args, ctx);
+    }
+    if (name == "component.catalog") {
+        return component_catalog(args, ctx);
     }
     const Registry::Fn* prim = ctx.primitives->find(name);
     if (prim == nullptr) {

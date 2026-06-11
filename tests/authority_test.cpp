@@ -32,6 +32,25 @@ Node act(std::string prim) { return Node{Action{std::move(prim), {}, {}}}; }
 
 } // namespace
 
+TEST_CASE("risk_tier classifies a capability set worst-first") {
+    using kernel::risk_tier;
+    CHECK(risk_tier({}) == "none");
+    CHECK(risk_tier({"fs.read", "session.read"}) == "read");
+    CHECK(risk_tier({"fs.read", "fs.write"}) == "write");
+    CHECK(risk_tier({"session.append"}) == "write");
+    CHECK(risk_tier({"fs.write", "task.run"}) == "exec");
+    CHECK(risk_tier({"task.run", "llm.stream"}) == "network");
+    CHECK(risk_tier({"http.fetch"}) == "network");
+}
+
+TEST_CASE("component.check/catalog are zero-cap builtins the fold accepts") {
+    Registry reg = test_registry();
+    Component c = component({}, Node{All{{act("component.catalog"), act("component.check")}}});
+    auto trace = check_component_authority(c, reg);
+    REQUIRE(trace.has_value());
+    CHECK(trace->reached.empty()); // recognized, but grant nothing
+}
+
 TEST_CASE("pure-only components need no capabilities") {
     Registry reg = test_registry();
     Component c = component({}, Node{All{{act("obj.build"),

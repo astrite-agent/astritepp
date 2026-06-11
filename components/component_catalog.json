@@ -1,0 +1,11 @@
+{
+  // List the live affordance set: every loaded component with its kind, caps,
+  // and description. Zero-cap, read-only — orientation, not authority.
+  "component": "component_catalog",
+  "kind": "tool",
+  "caps": [],
+  "description": "List the available components (tools, tasks, agents) and their capabilities.",
+  "parameters": {"type": "object", "properties": {}},
+  "tree": {"do": "component.catalog", "as": "out"},
+  "output": {"ref": "out"}
+}

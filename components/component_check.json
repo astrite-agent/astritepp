@@ -1,0 +1,18 @@
+{
+  // Validate a candidate component WITHOUT installing it: parse it, run the
+  // authority fold, and report {ok, name, kind, caps, reached, risk, errors}.
+  // The model inspects what it drafted before proposing it. Zero-cap, pure.
+  "component": "component_check",
+  "kind": "tool",
+  "caps": [],
+  "description": "Validate a candidate component (JSONC source) and report its authority and risk, without installing it.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "source": {"type": "string", "description": "The candidate component as JSONC text."}
+    },
+    "required": ["source"]
+  },
+  "tree": {"do": "component.check", "with": {"source": {"ref": "input.source"}}, "as": "out"},
+  "output": {"ref": "out"}
+}

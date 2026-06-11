@@ -9,9 +9,19 @@
 #include <string>
 
 #include "frontends/common.hpp"
+#include "schema/load.hpp"
 
 namespace fs = std::filesystem;
 using astrite::frontends::merge_dir_components;
+
+TEST_CASE("every embedded component parses with a name matching its key") {
+    for (const auto& [name, src] : astrite::components::ALL) {
+        INFO("component: " << name);
+        auto c = astrite::schema::load_component_jsonc(std::string(src));
+        REQUIRE(c.has_value());
+        CHECK(c->name == name);
+    }
+}
 
 namespace {
 fs::path make_dir(std::string suffix) {

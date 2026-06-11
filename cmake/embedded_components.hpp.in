@@ -15,6 +15,8 @@ inline constexpr std::string_view FS_LIST_JSONC = R"astrite(@FS_LIST_JSON@)astri
 inline constexpr std::string_view SEARCH_FIND_JSONC = R"astrite(@SEARCH_FIND_JSON@)astrite";
 inline constexpr std::string_view FS_WRITE_JSONC = R"astrite(@FS_WRITE_JSON@)astrite";
 inline constexpr std::string_view FS_EDIT_JSONC = R"astrite(@FS_EDIT_JSON@)astrite";
+inline constexpr std::string_view COMPONENT_CATALOG_JSONC = R"astrite(@COMPONENT_CATALOG_JSON@)astrite";
+inline constexpr std::string_view COMPONENT_CHECK_JSONC = R"astrite(@COMPONENT_CHECK_JSON@)astrite";
 
 inline constexpr std::pair<std::string_view, std::string_view> ALL[] = {
     {"turn", TURN_JSONC},
@@ -24,6 +26,8 @@ inline constexpr std::pair<std::string_view, std::string_view> ALL[] = {
     {"search_find", SEARCH_FIND_JSONC},
     {"fs_write", FS_WRITE_JSONC},
     {"fs_edit", FS_EDIT_JSONC},
+    {"component_catalog", COMPONENT_CATALOG_JSONC},
+    {"component_check", COMPONENT_CHECK_JSONC},
 };
 
 } // namespace astrite::components

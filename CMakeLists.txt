@@ -77,11 +77,13 @@ file(READ ${CMAKE_SOURCE_DIR}/components/fs_list.json FS_LIST_JSON)
 file(READ ${CMAKE_SOURCE_DIR}/components/search_find.json SEARCH_FIND_JSON)
 file(READ ${CMAKE_SOURCE_DIR}/components/fs_write.json FS_WRITE_JSON)
 file(READ ${CMAKE_SOURCE_DIR}/components/fs_edit.json FS_EDIT_JSON)
+file(READ ${CMAKE_SOURCE_DIR}/components/component_catalog.json COMPONENT_CATALOG_JSON)
+file(READ ${CMAKE_SOURCE_DIR}/components/component_check.json COMPONENT_CHECK_JSON)
 configure_file(cmake/embedded_components.hpp.in generated/embedded_components.hpp @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     components/turn.json components/echo.json components/fs_read.json
     components/fs_list.json components/search_find.json components/fs_write.json
-    components/fs_edit.json)
+    components/fs_edit.json components/component_catalog.json components/component_check.json)
 
 add_executable(astrite src/frontends/readline/main.cpp)
 target_include_directories(astrite PRIVATE ${CMAKE_BINARY_DIR}/generated)
