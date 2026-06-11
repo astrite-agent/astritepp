@@ -149,14 +149,15 @@ Element config_modal_content(const std::string& model, const std::string& base_u
 
 Element commands_modal_content() {
     std::vector<std::vector<Element>> rows;
-    rows.push_back({text("Command"), text("Description")});
+    // Style cells directly, not via SelectRow/SelectColumn Decorate — those also
+    // touch the adjacent border cells (a style/dim bleed onto the grid lines).
+    rows.push_back({text("Command") | bold, text("Description") | bold});
     for (const astrite::tui::SlashCommand& c : astrite::tui::all_commands()) {
         rows.push_back({text(c.name) | color(Color::CyanLight),
                         text(c.summary) | color(Color::GrayLight)});
     }
     Table table(rows);
     table.SelectAll().Border(LIGHT);
-    table.SelectRow(0).Decorate(bold);
     table.SelectRow(0).Border(LIGHT);
     return table.Render();
 }
@@ -206,23 +207,25 @@ Element status_modal_content(const std::string& model, const std::string& worksp
             ++turns;
         }
     }
+    // Label cells get the soft colour directly; SelectColumn(0).Decorate(dim) would
+    // also dim the grid lines adjacent to column 0 (a style bleed onto the border).
+    auto label = [](std::string s) { return text(std::move(s)) | color(Color::GrayLight); };
     std::vector<std::vector<Element>> body{
-        {text("model"), text(model)},
-        {text("workspace"), text(workspace)},
-        {text("segments"), text(std::to_string(t.segments().size()))},
-        {text("user turns"), text(std::to_string(turns))},
-        {text("tool calls"), text(std::to_string(tools))},
-        {text("state"), text(active ? "working" : "ready") |
-                            color(active ? Color::YellowLight : Color::GreenLight)},
+        {label("model"), text(model)},
+        {label("workspace"), text(workspace)},
+        {label("segments"), text(std::to_string(t.segments().size()))},
+        {label("user turns"), text(std::to_string(turns))},
+        {label("tool calls"), text(std::to_string(tools))},
+        {label("state"), text(active ? "working" : "ready") |
+                             color(active ? Color::YellowLight : Color::GreenLight)},
     };
     if (u.present) {
-        body.push_back({text("prompt tokens"), text(std::to_string(u.prompt))});
-        body.push_back({text("completion tokens"), text(std::to_string(u.completion))});
-        body.push_back({text("total tokens"), text(std::to_string(u.total))});
+        body.push_back({label("prompt tokens"), text(std::to_string(u.prompt))});
+        body.push_back({label("completion tokens"), text(std::to_string(u.completion))});
+        body.push_back({label("total tokens"), text(std::to_string(u.total))});
     }
     Table table(body);
     table.SelectAll().Border(LIGHT);
-    table.SelectColumn(0).Decorate(dim);
 
     Elements out{table.Render()};
     if (u.present) {
@@ -413,17 +416,12 @@ int main(int argc, char** argv) {
     };
 
     InputOption input_opt;
-    input_opt.placeholder = "message astrite++  ·  / for commands  ·  Tab for transcript";
+    // No placeholder: an empty placeholder would occupy the cursor cell and hide
+    // the cursor on an empty input. Hints live in the footer instead.
     input_opt.multiline = false;
     input_opt.cursor_position = &cursor_pos;
-    // No inverted/white-background field; just dim the placeholder. The terminal
-    // cursor is drawn by FTXUI independently of this.
-    input_opt.transform = [](InputState state) {
-        if (state.is_placeholder) {
-            state.element |= dim;
-        }
-        return state.element;
-    };
+    // No inverted/white-background field.
+    input_opt.transform = [](InputState state) { return state.element; };
     input_opt.on_change = [&] { history.reset(); }; // typing exits history navigation
     input_opt.on_enter = [&] {
         std::string text = input_text;
@@ -686,10 +684,25 @@ int main(int argc, char** argv) {
         // Input focus.
         auto candidates = astrite::tui::complete(input_text);
         if (!candidates.empty()) {
+            const bool sel_ok = popup_sel >= 0 && popup_sel < static_cast<int>(candidates.size());
             if (e == Event::Tab) {
-                if (popup_sel >= 0 && popup_sel < static_cast<int>(candidates.size())) {
+                if (sel_ok) {
                     input_text = candidates[static_cast<size_t>(popup_sel)]->name + " ";
+                    cursor_pos = static_cast<int>(input_text.size()); // cursor follows to the end
                     popup_sel = 0;
+                }
+                return true;
+            }
+            if (e == Event::Return) {
+                // Enter accepts the highlighted command (and runs it), rather than
+                // submitting the partially-typed text.
+                if (sel_ok) {
+                    std::string name = candidates[static_cast<size_t>(popup_sel)]->name;
+                    history.push(name);
+                    input_text.clear();
+                    cursor_pos = 0;
+                    popup_sel = 0;
+                    run_command(name);
                 }
                 return true;
             }
