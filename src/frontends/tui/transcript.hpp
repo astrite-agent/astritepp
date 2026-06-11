@@ -113,6 +113,13 @@ public:
 
     void clear() { segments_.clear(); }
 
+    // Replace the transcript with persisted segments (session restore). They are
+    // already finalized; no turn is active.
+    void restore(std::vector<Segment> segs) {
+        segments_ = std::move(segs);
+        turn_active_ = false;
+    }
+
 private:
     Segment* open_assistant_or_null() {
         if (!segments_.empty() && segments_.back().kind == Segment::Kind::assistant &&

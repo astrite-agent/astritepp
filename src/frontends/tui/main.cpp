@@ -35,6 +35,7 @@
 #include "frontends/tui/markdown_render.hpp"
 #include "frontends/tui/segment_render.hpp"
 #include "frontends/tui/transcript.hpp"
+#include "frontends/tui/transcript_io.hpp"
 #include "frontends/tui/transcript_view.hpp"
 #include "frontends/tui/view_state.hpp"
 #include "frontends/tui/widgets.hpp"
@@ -279,6 +280,11 @@ int main(int argc, char** argv) {
     const char* env_policy = std::getenv("ASTRITE_AUTHORITY_POLICY");
     const std::string policy = env_policy != nullptr ? env_policy : "review";
     const std::string session_path = ".astrite/sessions/current.jsonl";
+    // The typed UI transcript lives beside the LLM message log; restore it so a
+    // reopened client shows the prior conversation (cards, errors, and all).
+    const std::filesystem::path transcript_path = ".astrite/sessions/current.transcript.jsonl";
+    transcript.restore(astrite::tui::load_transcript(transcript_path));
+    auto persist = [&] { astrite::tui::save_transcript(transcript_path, transcript.segments()); };
     const char* env_ctx = std::getenv("OPENAI_CONTEXT_WINDOW");
     const int context_window = env_ctx != nullptr ? std::max(1, std::atoi(env_ctx)) : 128000;
 
@@ -301,6 +307,10 @@ int main(int argc, char** argv) {
                 usage.history.erase(usage.history.begin());
             }
         }
+        // Persist on settled state, not on every streaming delta.
+        if (!std::holds_alternative<astrite::runtime::AssistantDelta>(ev)) {
+            persist();
+        }
     };
 
     auto turn_active = [&] { return transcript.turn_active(); };
@@ -312,17 +322,16 @@ int main(int argc, char** argv) {
         if (!approve) {
             transcript.notice(runtime.reject_proposal(name) ? "rejected `" + name + "`"
                                                             : "no staged proposal `" + name + "`");
-            return;
-        }
-        if (turn_active()) {
+        } else if (turn_active()) {
             transcript.notice("finish the current turn before approving");
-            return;
+        } else {
+            auto r = runtime.accept_proposal(name);
+            transcript.notice(r.has_value()
+                                  ? "approved `" + r->name + "` (" + r->kind + ", " + r->risk +
+                                        " risk) — installed and pinned"
+                                  : "could not approve `" + name + "`: " + r.error());
         }
-        auto r = runtime.accept_proposal(name);
-        transcript.notice(r.has_value()
-                              ? "approved `" + r->name + "` (" + r->kind + ", " + r->risk +
-                                    " risk) — installed and pinned"
-                              : "could not approve `" + name + "`: " + r.error());
+        persist();
     });
 
     // Pump runtime events onto the UI thread. The Closure applies the transcript
@@ -341,6 +350,7 @@ int main(int argc, char** argv) {
         const astrite::tui::SlashCommand* cmd = astrite::tui::lookup(line);
         if (cmd == nullptr) {
             transcript.apply(astrite::runtime::TurnError{"unknown command: " + first_line(line)});
+            persist();
             return;
         }
         const std::string& n = cmd->name;
@@ -419,6 +429,7 @@ int main(int argc, char** argv) {
             following = true;
             scroll = 1.0f;
         }
+        persist(); // most commands don't change the transcript; cheap when unchanged
     };
 
     // Submit the current input as one message (possibly multi-line). Called from
@@ -440,6 +451,7 @@ int main(int argc, char** argv) {
             return;
         }
         transcript.user(text);
+        persist();
         scroll = 1.0f;
         following = true;
         if (turn.has_value() && turn->joinable()) {
