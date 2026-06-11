@@ -25,6 +25,8 @@ struct AssistantSettled {
     int completion_tokens = 0;
     int total_tokens = 0;
     bool has_usage = false;
+    int cache_read_tokens = 0;  // prompt tokens served from cache (trailing: keeps 5-arg init)
+    int cache_write_tokens = 0; // prompt tokens written to cache this call
 };
 struct ToolStarted {
     std::string id;

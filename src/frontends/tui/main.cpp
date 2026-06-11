@@ -131,7 +131,7 @@ agent is working.)";
 }
 
 struct UsageView {
-    int prompt = 0, completion = 0, total = 0;
+    int prompt = 0, completion = 0, total = 0, cache_read = 0, cache_write = 0;
     bool present = false;
     const std::vector<int>* history = nullptr;
     int context_window = 128000;
@@ -163,6 +163,11 @@ Element status_modal_content(const std::string& model, const std::string& worksp
         body.push_back({label("prompt tokens"), text(std::to_string(u.prompt))});
         body.push_back({label("completion tokens"), text(std::to_string(u.completion))});
         body.push_back({label("total tokens"), text(std::to_string(u.total))});
+        if (u.cache_read > 0 || u.cache_write > 0) {
+            body.push_back({label("cache read"),
+                            text(std::to_string(u.cache_read)) | color(Color::GreenLight)});
+            body.push_back({label("cache write"), text(std::to_string(u.cache_write))});
+        }
     }
     Table table(body);
     table.SelectAll().Border(LIGHT);
@@ -287,12 +292,16 @@ int main(int argc, char** argv) {
     const std::filesystem::path transcript_path = ".astrite/sessions/current.transcript.jsonl";
     transcript.restore(astrite::tui::load_transcript(transcript_path));
     auto persist = [&] { astrite::tui::save_transcript(transcript_path, transcript.segments()); };
+    // Prefer the provider's real context window; fall back to env, then a default.
     const char* env_ctx = std::getenv("OPENAI_CONTEXT_WINDOW");
-    const int context_window = env_ctx != nullptr ? std::max(1, std::atoi(env_ctx)) : 128000;
+    int context_window = runtime.context_window();
+    if (context_window <= 0) {
+        context_window = env_ctx != nullptr ? std::max(1, std::atoi(env_ctx)) : 128000;
+    }
 
     // Token usage, updated from AssistantSettled events (UI thread only).
     struct UsageState {
-        int prompt = 0, completion = 0, total = 0;
+        int prompt = 0, completion = 0, total = 0, cache_read = 0, cache_write = 0;
         bool present = false;
         std::vector<int> history; // total_tokens per model call, for the graph
     } usage;
@@ -303,6 +312,8 @@ int main(int argc, char** argv) {
             usage.prompt = s->prompt_tokens;
             usage.completion = s->completion_tokens;
             usage.total = s->total_tokens;
+            usage.cache_read = s->cache_read_tokens;
+            usage.cache_write = s->cache_write_tokens;
             usage.present = true;
             usage.history.push_back(s->total_tokens);
             if (usage.history.size() > 512) {
@@ -590,8 +601,8 @@ int main(int argc, char** argv) {
                 title = "status";
                 content = status_modal_content(
                     model, workspace, transcript, active,
-                    UsageView{usage.prompt, usage.completion, usage.total, usage.present,
-                              &usage.history, context_window});
+                    UsageView{usage.prompt, usage.completion, usage.total, usage.cache_read,
+                              usage.cache_write, usage.present, &usage.history, context_window});
                 break;
             }
             case at::Modal::config: // handled by the FTXUI Modal component, not here

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "kernel/primitive.hpp"
+#include "llm/provider.hpp"
 #include "llm/sse.hpp"
 #include "runtime/events.hpp"
 #include "runtime/session.hpp"
@@ -47,6 +48,11 @@ public:
     bool submit_user_message(const std::string& text, std::stop_token cancel = {});
 
     [[nodiscard]] EventChannel& events() { return events_; }
+
+    // The active model's context window (0 if unknown / chat injected for tests).
+    [[nodiscard]] int context_window() const {
+        return provider_ ? provider_->context_limit(provider_->model()) : 0;
+    }
 
     // ---- consent: the human side of self-modification (B4). These are the ONLY
     // way a model-authored component becomes active. The model stages a proposal
@@ -89,7 +95,8 @@ private:
     Options opts_;
     Session session_;
     kernel::Registry registry_;
-    std::vector<WriteRecord> journal_; // turn-thread only (turns are serialized)
+    std::shared_ptr<llm::Provider> provider_; // the default backend (null if chat injected)
+    std::vector<WriteRecord> journal_;        // turn-thread only (turns are serialized)
     EventChannel events_;
     schema::Value tool_defs_;
     std::mutex turn_mu_;             // one turn at a time

@@ -55,12 +55,14 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
         std::error_code ec;
         opts.workspace_root = std::filesystem::current_path(ec);
     }
+    std::shared_ptr<llm::Provider> built_provider;
     if (!opts.chat) {
         auto provider = llm::make_provider_from_env();
         if (!provider.has_value()) {
             return std::unexpected("runtime: " + provider.error());
         }
-        std::shared_ptr<llm::Provider> p = std::move(*provider);
+        built_provider = std::move(*provider);
+        std::shared_ptr<llm::Provider> p = built_provider;
         opts.chat = [p](const Value& messages, const Value& tools,
                         llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
             return p->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
@@ -68,6 +70,7 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
     }
 
     auto runtime = std::unique_ptr<Runtime>(new Runtime(std::move(opts)));
+    runtime->provider_ = std::move(built_provider);
     runtime->register_effects();
     runtime->tool_defs_ = runtime->tool_definitions();
 
@@ -428,7 +431,8 @@ void Runtime::register_effects() {
             }
             events_.push(AssistantSettled{turn->text, turn->usage.prompt_tokens,
                                           turn->usage.completion_tokens, turn->usage.total_tokens,
-                                          turn->usage.present});
+                                          turn->usage.present, turn->usage.cache_read_tokens,
+                                          turn->usage.cache_write_tokens});
 
             Value::List calls;
             calls.reserve(turn->tool_calls.size());
