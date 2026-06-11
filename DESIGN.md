@@ -22,7 +22,9 @@
 
 **Built and working — not greenfield.** The kernel (Value, the JSONC loader, the blackboard, the
 exhaustive-visit evaluator, the authority fold), the Linux sandbox floor (`no_new_privs → seccomp
-→ Landlock` via native syscalls), the OpenAI-compatible streaming client, the frontend-agnostic
+→ Landlock` via native syscalls), the multi-provider LLM backends (OpenAI-compatible, OpenAI-native
+GPT/Codex via the Responses API, and Anthropic with prompt caching) behind one `Provider` seam,
+the frontend-agnostic
 runtime, the **loop-as-data `turn` running live end-to-end**, the sandboxed fs tools
 (`fs.read` with line-range reads, `fs.list`, `fs.write`, `fs.edit`) and `search.find`,
 **`task.run` — confined declared-verb execution with structured results (the check-only slice of
@@ -431,7 +433,7 @@ component's granted capability set, and **executes inside a sandbox child (§7 g
 | `diff.workspace` | ReadOnly | **Built:** net unified diff of the agent's own session writes, from a kernel write-journal (`{path, before, after}` per `fs.write`/`fs.edit`). No git; includes agent-created files; bounded (large files summarized). The read-side counterpart to `fs.edit` |
 | `workspace.context` | ReadOnly | **Built:** deterministic orientation — workspace name, bounded top-level entries, detected project markers, and the live tool/task verbs |
 | `task.run` | TaskRun | the **only** execution primitive — `dispatch`'s twin (see *Execution: tasks, not a shell*, below). Resolves a verb against the statically-known task-component table; parameters bind into typed, shape-validated holes as discrete argv elements. Transactional by default: task-scoped scratch, no network unless declared, settles to `{status, output, delta}`. **Built (check-only):** confined fork+exec of a pinned argv, read on workspace+system / write on declared subtrees, net-deny, captured+capped stdout/stderr, timeout, structured `{status, code, stdout, stderr, timed_out}`. **Planned:** typed argv holes, scratch/CoW transactions + `produce` promotion |
-| `llm.stream` | Network | kernel owns the SSE fold + index-keyed tool-call accumulation; leaf settles one `{text, tool_calls, finish, usage}` per tick |
+| `llm.stream` | Network | runs behind the `Provider` seam (OpenAI-compatible / OpenAI-native GPT / Anthropic, selected by `ASTRITE_PROVIDER`); each provider owns its SSE fold + tool-call accumulation; leaf settles one `{text, tool_calls, finish, usage}` (with cache tokens) per tick |
 | `http.fetch` | Network | **later**; host/scheme allowlist; size/time caps; counts toward lethal-trifecta |
 | `session.append` / `session.read` / `session.fold` | Write/ReadOnly | append-only JSONL; `fold` is a kernel-driven cursor fold for resuming sessions larger than the blackboard |
 | `ui.emit` / `ui.prompt` | Write / *UntrustedInput* | **M8**; `ui.emit` hands a finished `UiTree` value (§10) to the frontend — the only render effect, and it refuses `Secret` values; `ui.prompt` is the blocking human-input effect (its result is untrusted input). Neither can produce consent chrome (§7) |
@@ -652,13 +654,20 @@ hash-pinned user-level trust record.
   new substrate. If the `Running`/approval-suspension model ever needs real suspension, C++20
   coroutines map naturally onto BT ticks (`Running` = suspended frame) — a future option, not the
   baseline.
-- **Streaming:** `llm.stream` is OpenAI-compatible (`POST {base_url}/chat/completions`,
-  `stream:true`, SSE) over a blocking libcurl easy handle; the write callback feeds a line
-  accumulator. **Sharp edge:** streamed `tool_calls` arrive as index-keyed fragments accumulated
-  across chunks before dispatch — index is untrusted (map key only, never an allocation size),
-  id/name overwrite, arguments append, capped distinct calls, incomplete entries filtered.
-  Cancellation via the progress callback checking a `stop_token`. Recorded SSE fixture captures
-  drive the unit tests; live verification against a real endpoint is a milestone gate.
+- **Streaming & providers:** `llm.stream` runs behind a `Provider` seam over a shared blocking
+  libcurl transport (no async runtime). Three backends exist: **OpenAi​CompatProvider**
+  (`/chat/completions`, any compatible endpoint), **GptProvider** (OpenAI-native `/responses` —
+  reasoning effort, native usage/caching), and **AnthropicProvider** (`/messages` — content
+  blocks, tool_use/tool_result, `cache_control` on the stable prefix). Each owns its request
+  translation (astrite's messages/tools are chat-completions-shaped; the native providers convert
+  both ways) and its SSE event fold, surfacing a uniform `{text, tool_calls, finish, usage}` with
+  cache-read/write tokens. `ASTRITE_PROVIDER` selects; a local `.env` supplies keys.
+  **Sharp edge:** streamed `tool_calls` arrive as index/id-keyed fragments accumulated across
+  chunks before dispatch — the key is untrusted (map key only, never an allocation size), id/name
+  overwrite, arguments append, capped distinct calls, incomplete entries filtered. Cancellation via
+  the progress callback checking a `stop_token`. Translation + folds are unit-tested against
+  fixtures; the `astrite-llm` REPL and `ASTRITE_LIVE_TESTS`-gated smokes verify each backend live
+  (caching confirmed: a repeated prefix is written then read from cache).
 - **Cross-turn state is event-sourced** in the JSONL session log and reseeded each turn; the
   blackboard is turn/activation-scoped. There is no mutable long-lived blackboard.
 - **Prompt context is runtime-owned.** The initial system record names the workspace root,

@@ -11,6 +11,7 @@ add_executable(astrite_tests
     dotenv_test.cpp
     anthropic_test.cpp
     gpt_test.cpp
+    provider_live_test.cpp
     runtime_test.cpp
     transcript_test.cpp
     sandbox_test.cpp

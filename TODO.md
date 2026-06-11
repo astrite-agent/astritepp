@@ -141,6 +141,20 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
 - [x] Config from env: `OPENAI_API_KEY` (required), `OPENAI_MODEL`, `OPENAI_BASE_URL`.
 - [x] Recorded SSE fixture captures in `tests/` drive the unit tests; **live verification**
       against a real endpoint (streamed text + tool-call round trip) is the milestone gate.
+- [x] **Provider abstraction (multi-backend), 2026-06-11**: `llm::Provider` seam over a shared
+      `llm::http` libcurl transport, selected by `ASTRITE_PROVIDER` (+ a local `.env` loader).
+      Three backends, each owning request translation + SSE fold and surfacing uniform usage with
+      cache-read/write tokens:
+      - **OpenAiCompatProvider** — `/chat/completions` (the former client, generalized).
+      - **GptProvider** — OpenAI-native `/responses` (reasoning effort, function_call items,
+        cached_tokens). Verified live against gpt-5.2 (incl. automatic caching).
+      - **AnthropicProvider** — `/messages` (content blocks, tool_use/tool_result coalescing,
+        `cache_control` on the stable prefix). Verified live against Haiku 4.5; caching proven
+        (7717-token prefix written then read from cache).
+      Plus `list_models` + `context_limit` per provider (surfaced in the TUI context gauge + cache
+      tokens in /status), the standalone **`astrite-llm` REPL**, and `ASTRITE_LIVE_TESTS`-gated
+      round-trip smokes (skip cleanly without the opt-in + key). Full tool loop verified end to end
+      through both native providers via the real agent.
 - [ ] Fuzz target: SSE/tool-call accumulator.
 
 ## M5 — Runtime (`src/runtime/`)
