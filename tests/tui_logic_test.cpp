@@ -54,6 +54,19 @@ TEST_CASE("lookup resolves a command line's leading token") {
     CHECK(lookup("not a command") == nullptr);
 }
 
+TEST_CASE("the consent commands are registered and resolve with an argument") {
+    CHECK(has_command(complete("/"), "/proposals"));
+    CHECK(has_command(complete("/"), "/approve"));
+    CHECK(has_command(complete("/"), "/reject"));
+    // /approve takes a proposal name; lookup resolves the leading token only.
+    CHECK(lookup("/approve shout") != nullptr);
+    CHECK(lookup("/approve shout") == lookup("/approve"));
+    CHECK(lookup("/reject shout") == lookup("/reject"));
+    // prefix completion offers them
+    CHECK(has_command(complete("/appr"), "/approve"));
+    CHECK(has_command(complete("/prop"), "/proposals"));
+}
+
 TEST_CASE("history: empty history recall returns the current text") {
     History h;
     CHECK(h.up("x") == "x");

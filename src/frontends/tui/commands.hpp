@@ -27,6 +27,9 @@ inline const std::vector<SlashCommand>& all_commands() {
         {"/expand", "Expand all transcript segments"},
         {"/top", "Scroll to the top"},
         {"/bottom", "Scroll to the bottom (follow)"},
+        {"/proposals", "List components proposed for review"},
+        {"/approve", "Approve a proposed component: /approve <name>"},
+        {"/reject", "Reject a proposed component: /reject <name>"},
         {"/quit", "Exit astrite++"},
         {"/exit", "Exit astrite++"},
     };

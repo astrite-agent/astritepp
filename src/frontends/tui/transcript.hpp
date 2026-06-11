@@ -15,7 +15,7 @@
 namespace astrite::tui {
 
 struct Segment {
-    enum class Kind { user, assistant, tool, error, proposal };
+    enum class Kind { user, assistant, tool, error, proposal, notice };
     Kind kind = Kind::user;
     std::string text;        // user input / accumulated assistant text / error message
     std::string tool_name;   // tool segments only
@@ -29,6 +29,16 @@ struct Segment {
 
 class Transcript {
 public:
+    // A kernel-chrome notice (command results, consent outcomes) — not model
+    // content and not part of the event fold, just a frontend-local line.
+    void notice(std::string text) {
+        Segment s;
+        s.kind = Segment::Kind::notice;
+        s.text = std::move(text);
+        s.done = true;
+        segments_.push_back(std::move(s));
+    }
+
     void user(std::string text) {
         Segment s;
         s.kind = Segment::Kind::user;

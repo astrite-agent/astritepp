@@ -118,6 +118,8 @@ Element segment_body(const Segment& s, bool collapsed, bool markdown) {
         rows.push_back(text("pending review — approve with /approve " + s.tool_name) | dim);
         return vbox(std::move(rows)) | borderDouble | color(Color::Magenta);
     }
+    case Segment::Kind::notice:
+        return hbox({text("⛨ ") | bold, paragraph(s.text)}) | color(Color::Magenta);
     }
     return text("");
 }
@@ -432,6 +434,47 @@ int main(int argc, char** argv) {
             following = false;
             scroll = 0.0f;
         } else if (n == "/bottom") {
+            following = true;
+            scroll = 1.0f;
+        } else if (n == "/proposals") {
+            auto names = runtime.pending_proposals();
+            if (names.empty()) {
+                transcript.notice("no components proposed for review");
+            } else {
+                std::string list;
+                for (const std::string& nm : names) {
+                    list += (list.empty() ? "" : ", ") + nm;
+                }
+                transcript.notice("proposed (review with /approve <name> or /reject <name>): " +
+                                  list);
+            }
+            following = true;
+            scroll = 1.0f;
+        } else if (n == "/approve" || n == "/reject") {
+            // The consent action is a human action handled here (kernel chrome),
+            // never by the model. The argument is the proposal name.
+            std::string arg = line.size() > n.size() ? line.substr(n.size() + 1) : "";
+            while (!arg.empty() && arg.front() == ' ') {
+                arg.erase(arg.begin());
+            }
+            while (!arg.empty() && arg.back() == ' ') {
+                arg.pop_back();
+            }
+            if (arg.empty()) {
+                transcript.notice(std::string("usage: ") + n + " <proposal-name>");
+            } else if (n == "/approve" && turn_active()) {
+                // accept_proposal takes the turn lock; don't block the UI mid-turn.
+                transcript.notice("finish the current turn before approving");
+            } else if (n == "/approve") {
+                auto r = runtime.accept_proposal(arg);
+                transcript.notice(r.has_value()
+                                      ? "approved `" + r->name + "` (" + r->kind + ", " + r->risk +
+                                            " risk) — installed and pinned"
+                                      : "could not approve `" + arg + "`: " + r.error());
+            } else {
+                transcript.notice(runtime.reject_proposal(arg) ? "rejected `" + arg + "`"
+                                                               : "no staged proposal `" + arg + "`");
+            }
             following = true;
             scroll = 1.0f;
         }
