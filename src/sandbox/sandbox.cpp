@@ -30,6 +30,7 @@
 
 #include "sandbox/range.hpp"
 #include "sandbox/seccomp.hpp"
+#include "util/control_plane.hpp"
 
 namespace astrite::sandbox {
 namespace {
@@ -335,6 +336,10 @@ bool write_file_full(const std::string& path, const std::string& content) {
 }
 
 int op_write(const std::string& base, const std::string& rel, const std::string& content) {
+    if (is_control_plane_rel(rel)) { // suspenders: independent of the runtime belt
+        write_str(1, "fs.write: the control plane (.astrite) is read-only to components");
+        return 1;
+    }
     if (!write_file_full(join(base, rel), content)) {
         write_str(1, "fs.write: cannot write `" + rel + "`: " + std::strerror(errno));
         return 1;
@@ -371,6 +376,10 @@ bool parse_edit_payload(const std::string& payload, std::string& old_text, std::
 
 int op_edit(const std::string& base, const std::string& rel, const std::string& expected_s,
             const std::string& payload) {
+    if (is_control_plane_rel(rel)) { // suspenders: independent of the runtime belt
+        write_str(1, "fs.edit: the control plane (.astrite) is read-only to components");
+        return 1;
+    }
     std::string old_text, new_text;
     if (!parse_edit_payload(payload, old_text, new_text)) {
         write_str(1, "fs.edit: malformed payload");

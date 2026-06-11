@@ -11,6 +11,7 @@
 #include "runtime/fs_read_args.hpp"
 #include "runtime/task_args.hpp"
 #include "sandbox/sandbox.hpp"
+#include "util/control_plane.hpp"
 
 namespace astrite::runtime {
 
@@ -96,6 +97,21 @@ std::expected<std::string, kernel::KernelError> confine(const Value& args, const
     return *resolved.get("rel")->as_str();
 }
 
+// Belt for write effects: confine, then refuse the control plane (.astrite). The
+// model's only route to a write is through here, so this is the primary gate; the
+// sandbox helper re-checks in its confined child as the suspender.
+std::expected<std::string, kernel::KernelError> confine_write(const Value& args, const char* prim) {
+    auto rel = confine(args, prim);
+    if (!rel.has_value()) {
+        return rel;
+    }
+    if (is_control_plane_rel(*rel)) {
+        return std::unexpected(kernel::KernelError{
+            std::string(prim) + ": the control plane (.astrite) is read-only to components"});
+    }
+    return rel;
+}
+
 // list/find may target the base root, which path.resolve rejects (empty rel);
 // "." and "" mean "the workspace root" here.
 std::expected<std::string, kernel::KernelError> confine_dir(const Value& args, const char* prim) {
@@ -167,7 +183,7 @@ void Runtime::register_effects() {
     registry_.add_effect(
         "fs.write", "fs.write",
         [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
-            auto rel = confine(args, "fs.write");
+            auto rel = confine_write(args, "fs.write");
             if (!rel.has_value()) {
                 return std::unexpected(rel.error());
             }
@@ -185,7 +201,7 @@ void Runtime::register_effects() {
     registry_.add_effect(
         "fs.edit", "fs.edit",
         [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
-            auto rel = confine(args, "fs.edit");
+            auto rel = confine_write(args, "fs.edit");
             if (!rel.has_value()) {
                 return std::unexpected(rel.error());
             }

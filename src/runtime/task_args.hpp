@@ -18,6 +18,7 @@
 #include "kernel/trust.hpp"
 #include "sandbox/sandbox.hpp"
 #include "schema/value.hpp"
+#include "util/control_plane.hpp"
 
 namespace astrite::runtime {
 
@@ -31,9 +32,17 @@ namespace detail {
 // Resolve a workspace-relative subpath to an absolute path under `root`. The
 // anchors "", ".", and "workspace" mean the root itself; everything else goes
 // through the path.resolve belt (rejecting absolute paths and `..` escapes).
+// `for_write` paths additionally may not be the root (that would grant write
+// over the whole workspace, including the control plane) nor `.astrite` itself —
+// so a task can never be used to author its own components.
 [[nodiscard]] inline std::expected<std::filesystem::path, kernel::KernelError>
-confine_under(const std::filesystem::path& root, const std::string& rel, const char* what) {
+confine_under(const std::filesystem::path& root, const std::string& rel, const char* what,
+              bool for_write) {
     if (rel.empty() || rel == "." || rel == "workspace") {
+        if (for_write) {
+            return std::unexpected(kernel::KernelError{
+                std::string("task: ") + what + ": the workspace root is not a valid write target"});
+        }
         return root;
     }
     schema::Value rq = schema::Value::object();
@@ -47,7 +56,12 @@ confine_under(const std::filesystem::path& root, const std::string& rel, const c
             std::string("task: ") + what + ": " +
             (reason != nullptr && reason->as_str() != nullptr ? *reason->as_str() : "bad path")});
     }
-    return root / *resolved.get("rel")->as_str();
+    const std::string& r = *resolved.get("rel")->as_str();
+    if (for_write && is_control_plane_rel(r)) {
+        return std::unexpected(kernel::KernelError{std::string("task: ") + what +
+                                                   ": the control plane (.astrite) is off-limits"});
+    }
+    return root / r;
 }
 
 } // namespace detail
@@ -94,7 +108,7 @@ build_task_spec(const schema::Value& spec, const std::filesystem::path& workspac
         }
         cwd = *c->as_str();
     }
-    auto cwd_abs = detail::confine_under(workspace_root, cwd, "cwd");
+    auto cwd_abs = detail::confine_under(workspace_root, cwd, "cwd", /*for_write=*/false);
     if (!cwd_abs.has_value()) {
         return std::unexpected(cwd_abs.error());
     }
@@ -112,7 +126,8 @@ build_task_spec(const schema::Value& spec, const std::filesystem::path& workspac
                 return std::unexpected(
                     kernel::KernelError{"task: every `writable` entry must be a string"});
             }
-            auto abs = detail::confine_under(workspace_root, *p.as_str(), "writable");
+            auto abs = detail::confine_under(workspace_root, *p.as_str(), "writable",
+                                             /*for_write=*/true);
             if (!abs.has_value()) {
                 return std::unexpected(abs.error());
             }

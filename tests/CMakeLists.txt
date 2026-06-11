@@ -16,6 +16,7 @@ add_executable(astrite_tests
     range_test.cpp
     task_test.cpp
     components_test.cpp
+    control_plane_test.cpp
     tui_logic_test.cpp
     markdown_test.cpp
     tui_render_test.cpp

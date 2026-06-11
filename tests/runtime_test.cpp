@@ -108,6 +108,23 @@ TEST_CASE("task spec: a path escape in cwd or writable is rejected") {
     CHECK_FALSE(runtime::build_task_spec(bad_w, "/work/ws").has_value());
 }
 
+TEST_CASE("task spec: a writable subtree may not be the root or the control plane") {
+    // The workspace root would grant write over .astrite; the control plane is
+    // off-limits directly. Both must be rejected so a task can't be used to author
+    // its own components.
+    for (const char* w : {".", "workspace", ".astrite", ".astrite/components"}) {
+        Value spec = Value::object();
+        spec.set("argv", str_list({"true"}));
+        spec.set("writable", str_list({w}));
+        CHECK_FALSE(runtime::build_task_spec(spec, "/work/ws").has_value());
+    }
+    // A proper subtree is still fine.
+    Value ok = Value::object();
+    ok.set("argv", str_list({"cmake", "--build", "build"}));
+    ok.set("writable", str_list({"build"}));
+    CHECK(runtime::build_task_spec(ok, "/work/ws").has_value());
+}
+
 TEST_CASE("task spec: net access is rejected for now (deferred)") {
     Value spec = Value::object();
     spec.set("argv", str_list({"true"}));
@@ -482,6 +499,35 @@ runtime::Options say_options(const fs::path& session, const fs::path& ws, runtim
     return opts;
 }
 } // namespace
+
+TEST_CASE("fs.write tool: the model cannot write the control plane (.astrite)") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_cp_e2e";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+
+    ScriptedChat chat;
+    chat.script.push_back(
+        {"",
+         {{"c1", "fs_write",
+           R"({"path":".astrite/components/evil.json","content":"{\"component\":\"evil\"}"})"}},
+         "tool_calls", {}});
+    chat.script.push_back({"blocked", {}, "stop", {}});
+
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    auto fsw = load_component_jsonc(components::FS_WRITE_JSONC);
+    REQUIRE(fsw.has_value());
+    opts.components.emplace("fs_write", std::move(*fsw));
+
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("write a component"));
+    CHECK(tool_result(file).find(".astrite") != std::string::npos); // rejected, reason surfaced
+    CHECK_FALSE(fs::exists(ws / ".astrite" / "components" / "evil.json"));
+    fs::remove_all(ws);
+    fs::remove(file);
+}
 
 TEST_CASE("task components are model-callable tools (with an empty arg schema)") {
     fs::path file = temp_session();
