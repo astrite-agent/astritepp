@@ -9,7 +9,6 @@
 #include <vector>
 
 #include <ftxui/dom/elements.hpp>
-#include <ftxui/dom/flexbox_config.hpp>
 #include <ftxui/screen/color.hpp>
 
 #include "frontends/tui/markdown.hpp"
@@ -69,9 +68,10 @@ inline ftxui::Element inline_flow(const std::vector<md::Inline>& spans) {
     if (words.empty()) {
         return text("");
     }
-    FlexboxConfig cfg;
-    cfg.wrap = FlexboxConfig::Wrap::Wrap;
-    return flexbox(std::move(words), cfg);
+    // hflow is FTXUI's idiomatic wrapping row — the same mechanism paragraph()
+    // uses internally, but taking styled elements so inline bold/code/links wrap
+    // together. (paragraph() itself only takes a single-style string.)
+    return hflow(std::move(words));
 }
 
 } // namespace detail

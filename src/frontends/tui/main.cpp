@@ -9,11 +9,9 @@
 // cancel) is durable across that migration.
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -238,12 +236,14 @@ int main(int argc, char** argv) {
     const std::string workspace = std::filesystem::current_path().string();
 
     ScreenInteractive screen = ScreenInteractive::Fullscreen();
-    std::mutex mu;
+    // All UI state below is touched only on the UI thread: the runtime-event pump
+    // posts Closures (screen.Post) that apply transcript updates inside the event
+    // loop, so no mutex is needed. The spinner animates via RequestAnimationFrame.
     astrite::tui::Transcript transcript;
     ViewState view_state;
     std::string input_text;
     std::optional<std::jthread> turn;
-    std::atomic<int> frame{0};
+    const auto t0 = std::chrono::steady_clock::now();
     float scroll = 1.0f;
     bool following = true;
     int popup_sel = 0;
@@ -278,39 +278,20 @@ int main(int argc, char** argv) {
     const std::string policy = env_policy != nullptr ? env_policy : "review";
     const std::string session_path = ".astrite/sessions/current.jsonl";
 
-    auto seg_count = [&] {
-        std::lock_guard lock(mu);
-        return static_cast<int>(transcript.segments().size());
-    };
-    auto turn_active = [&] {
-        std::lock_guard lock(mu);
-        return transcript.turn_active();
-    };
+    auto seg_count = [&] { return static_cast<int>(transcript.segments().size()); };
+    auto turn_active = [&] { return transcript.turn_active(); };
 
+    // Pump runtime events onto the UI thread as Closures (Post is thread-safe and
+    // wakes the loop), so transcript mutation happens on the UI thread — no mutex.
     std::jthread pump([&] {
         while (auto event = runtime.events().pop()) {
-            {
-                std::lock_guard lock(mu);
-                transcript.apply(*event);
-            }
-            screen.PostEvent(Event::Custom);
-        }
-    });
-    std::jthread ticker([&](std::stop_token st) {
-        using namespace std::chrono_literals;
-        while (!st.stop_requested()) {
-            std::this_thread::sleep_for(120ms);
-            if (turn_active()) {
-                frame.fetch_add(1, std::memory_order_relaxed);
-                screen.PostEvent(Event::Custom);
-            }
+            screen.Post([&transcript, ev = std::move(*event)] { transcript.apply(ev); });
         }
     });
 
     auto run_command = [&](const std::string& line) {
         const astrite::tui::SlashCommand* cmd = astrite::tui::lookup(line);
         if (cmd == nullptr) {
-            std::lock_guard lock(mu);
             transcript.apply(astrite::runtime::TurnError{"unknown command: " + first_line(line)});
             return;
         }
@@ -331,7 +312,6 @@ int main(int argc, char** argv) {
             config_sel = 0;
         } else if (n == "/clear") {
             if (!turn_active()) {
-                std::lock_guard lock(mu);
                 transcript.clear();
                 view_state.focus_input();
             }
@@ -378,7 +358,6 @@ int main(int argc, char** argv) {
             return;
         }
         {
-            std::lock_guard lock(mu);
             transcript.user(text);
         }
         input_text.clear();
@@ -398,7 +377,6 @@ int main(int argc, char** argv) {
         int count = 0;
         const bool transcript_focus = view_state.focus() == at::Focus::transcript;
         {
-            std::lock_guard lock(mu);
             active = transcript.turn_active();
             const auto& segs = transcript.segments();
             count = static_cast<int>(segs.size());
@@ -414,8 +392,15 @@ int main(int argc, char** argv) {
             lines.push_back(text("Ask astrite++ to read, search, or edit the workspace.") | dim);
         }
 
+        if (active) {
+            screen.RequestAnimationFrame(); // keep frames coming while the turn runs
+        }
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                  t0)
+                .count();
         Element status =
-            active ? hbox({spinner(5, static_cast<size_t>(frame.load(std::memory_order_relaxed))),
+            active ? hbox({spinner(5, static_cast<size_t>(elapsed_ms / 90)),
                            text(" working") | color(Color::YellowLight), text("  esc cancel") | dim})
                    : text("ready") | color(Color::GreenLight);
         Element header = hbox({
@@ -481,7 +466,6 @@ int main(int argc, char** argv) {
                 content = commands_modal_content();
                 break;
             case at::Modal::status: {
-                std::lock_guard lock(mu);
                 title = "status";
                 content = status_modal_content(model, workspace, transcript, active);
                 break;
