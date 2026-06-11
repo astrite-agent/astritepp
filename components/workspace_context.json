@@ -1,0 +1,12 @@
+{
+  // Deterministic session orientation: workspace name, top-level entries,
+  // detected project markers (CMakeLists.txt, Cargo.toml, go.mod, …), and the
+  // live tool/task verbs. Call it first to avoid rediscovering the obvious.
+  "component": "workspace_context",
+  "kind": "tool",
+  "caps": ["workspace.context"],
+  "description": "Summarize the workspace: name, top-level entries, project type markers, and available tools/tasks.",
+  "parameters": {"type": "object", "properties": {}},
+  "tree": {"do": "workspace.context", "as": "out"},
+  "output": {"ref": "out"}
+}

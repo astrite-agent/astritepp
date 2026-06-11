@@ -81,12 +81,14 @@ file(READ ${CMAKE_SOURCE_DIR}/components/component_catalog.json COMPONENT_CATALO
 file(READ ${CMAKE_SOURCE_DIR}/components/component_check.json COMPONENT_CHECK_JSON)
 file(READ ${CMAKE_SOURCE_DIR}/components/component_propose.json COMPONENT_PROPOSE_JSON)
 file(READ ${CMAKE_SOURCE_DIR}/components/diff_workspace.json DIFF_WORKSPACE_JSON)
+file(READ ${CMAKE_SOURCE_DIR}/components/workspace_context.json WORKSPACE_CONTEXT_JSON)
 configure_file(cmake/embedded_components.hpp.in generated/embedded_components.hpp @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     components/turn.json components/echo.json components/fs_read.json
     components/fs_list.json components/search_find.json components/fs_write.json
     components/fs_edit.json components/component_catalog.json components/component_check.json
-    components/component_propose.json components/diff_workspace.json)
+    components/component_propose.json components/diff_workspace.json
+    components/workspace_context.json)
 
 add_executable(astrite src/frontends/readline/main.cpp)
 target_include_directories(astrite PRIVATE ${CMAKE_BINARY_DIR}/generated)

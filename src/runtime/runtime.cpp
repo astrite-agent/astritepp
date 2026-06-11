@@ -261,6 +261,53 @@ void Runtime::register_effects() {
         });
 
     registry_.add_effect(
+        "workspace.context", "workspace.context",
+        [this, base](const Value&) -> std::expected<Value, kernel::KernelError> {
+            // Deterministic session orientation, so the model doesn't burn calls
+            // rediscovering the obvious: workspace name, top-level entries,
+            // detected project markers, and the live tool/task verbs.
+            Value out = Value::object();
+            std::string root_name = base.filename().string();
+            if (root_name.empty()) {
+                root_name = base.parent_path().filename().string();
+            }
+            out.set("root", Value::str(root_name.empty() ? base.string() : root_name));
+
+            Value::List entries;
+            sandbox::OpResult listing = sandbox::run_fs_op("list", base, "");
+            if (listing.ok) {
+                std::vector<std::string> lines = util::detail::split_lines(listing.output);
+                constexpr std::size_t kCap = 200;
+                for (std::size_t i = 0; i < lines.size() && i < kCap; ++i) {
+                    entries.push_back(Value::str(lines[i]));
+                }
+            }
+            out.set("entries", Value::list(std::move(entries)));
+
+            Value::List markers;
+            for (const char* m : {"CMakeLists.txt", "Cargo.toml", "go.mod", "package.json",
+                                  "pyproject.toml", "Makefile", "meson.build", ".git"}) {
+                std::error_code ec;
+                if (std::filesystem::exists(base / m, ec)) {
+                    markers.push_back(Value::str(m));
+                }
+            }
+            out.set("markers", Value::list(std::move(markers)));
+
+            Value::List tools, tasks;
+            for (const auto& [name, comp] : opts_.components) {
+                if (comp.kind == "tool") {
+                    tools.push_back(Value::str(name));
+                } else if (comp.kind == "task") {
+                    tasks.push_back(Value::str(name));
+                }
+            }
+            out.set("tools", Value::list(std::move(tools)));
+            out.set("tasks", Value::list(std::move(tasks)));
+            return out;
+        });
+
+    registry_.add_effect(
         "diff.workspace", "diff.workspace",
         [this](const Value&) -> std::expected<Value, kernel::KernelError> {
             // The net change per path from the session write-journal — kernel-

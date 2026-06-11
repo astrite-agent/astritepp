@@ -19,6 +19,7 @@ inline constexpr std::string_view COMPONENT_CATALOG_JSONC = R"astrite(@COMPONENT
 inline constexpr std::string_view COMPONENT_CHECK_JSONC = R"astrite(@COMPONENT_CHECK_JSON@)astrite";
 inline constexpr std::string_view COMPONENT_PROPOSE_JSONC = R"astrite(@COMPONENT_PROPOSE_JSON@)astrite";
 inline constexpr std::string_view DIFF_WORKSPACE_JSONC = R"astrite(@DIFF_WORKSPACE_JSON@)astrite";
+inline constexpr std::string_view WORKSPACE_CONTEXT_JSONC = R"astrite(@WORKSPACE_CONTEXT_JSON@)astrite";
 
 inline constexpr std::pair<std::string_view, std::string_view> ALL[] = {
     {"turn", TURN_JSONC},
@@ -32,6 +33,7 @@ inline constexpr std::pair<std::string_view, std::string_view> ALL[] = {
     {"component_check", COMPONENT_CHECK_JSONC},
     {"component_propose", COMPONENT_PROPOSE_JSONC},
     {"diff_workspace", DIFF_WORKSPACE_JSONC},
+    {"workspace_context", WORKSPACE_CONTEXT_JSONC},
 };
 
 } // namespace astrite::components

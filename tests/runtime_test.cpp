@@ -532,6 +532,37 @@ TEST_CASE("fs.write tool: the model cannot write the control plane (.astrite)") 
     fs::remove(file);
 }
 
+TEST_CASE("workspace.context: reports root, entries, markers, and verbs") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_wsctx";
+    fs::remove_all(ws);
+    fs::create_directories(ws / "src");
+    std::ofstream(ws / "CMakeLists.txt") << "project(demo)";
+    std::ofstream(ws / "README.md") << "# demo";
+
+    ScriptedChat chat;
+    chat.script.push_back({"", {{"c1", "workspace_context", "{}"}}, "tool_calls", {}});
+    chat.script.push_back({"oriented", {}, "stop", {}});
+
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    auto wc = load_component_jsonc(components::WORKSPACE_CONTEXT_JSONC);
+    REQUIRE(wc.has_value());
+    opts.components.emplace("workspace_context", std::move(*wc));
+
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("orient yourself"));
+
+    const std::string r = tool_result(file);
+    CHECK(r.find("astrite_wsctx") != std::string::npos); // root basename
+    CHECK(r.find("CMakeLists.txt") != std::string::npos); // detected marker
+    CHECK(r.find("src") != std::string::npos);            // top-level entry
+    CHECK(r.find("workspace_context") != std::string::npos); // listed among tools
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
 TEST_CASE("diff.workspace: reports the net change the agent made this session") {
     fs::path file = temp_session();
     fs::path ws = fs::temp_directory_path() / "astrite_diff_e2e";
