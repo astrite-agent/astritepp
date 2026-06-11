@@ -92,3 +92,36 @@ TEST_CASE("merge_dir_components: a missing directory is a no-op, not an error") 
     CHECK(r.has_value());
     CHECK(map.empty());
 }
+
+TEST_CASE("merge_dir_components: a refusing trust gate skips the component, no error") {
+    fs::path dir = make_dir("gated");
+    write_file(dir / "build.json", BUILD_TASK);
+
+    astrite::kernel::ComponentMap refused;
+    auto deny = [](const std::string&, const std::string&) { return false; };
+    REQUIRE(merge_dir_components(refused, dir, deny).has_value());
+    CHECK_FALSE(refused.contains("build"));
+
+    astrite::kernel::ComponentMap admitted;
+    auto allow = [](const std::string&, const std::string&) { return true; };
+    REQUIRE(merge_dir_components(admitted, dir, allow).has_value());
+    CHECK(admitted.contains("build"));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("admit_disk_component: strict refuses the unapproved, admits the approved") {
+    using namespace astrite::frontends;
+    using namespace astrite::runtime;
+    fs::path trust = make_dir("admit");
+    const std::string source(BUILD_TASK);
+
+    // No record yet: warn admits, strict refuses.
+    CHECK(admit_disk_component("build", source, trust, TrustPolicy::warn));
+    CHECK_FALSE(admit_disk_component("build", source, trust, TrustPolicy::strict));
+
+    // Pin the exact source: strict now admits it; a changed source is refused.
+    REQUIRE(write_trust_record(trust, make_trust_record("build", source, {"task.run"}, "exec", "t")));
+    CHECK(admit_disk_component("build", source, trust, TrustPolicy::strict));
+    CHECK_FALSE(admit_disk_component("build", source + "\n", trust, TrustPolicy::strict));
+    fs::remove_all(trust);
+}

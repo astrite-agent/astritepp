@@ -6,17 +6,21 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "embedded_components.hpp" // generated at configure time
 #include "kernel/primitive.hpp"
+#include "runtime/trust_store.hpp"
 #include "schema/load.hpp"
 
 namespace astrite::frontends {
@@ -31,12 +35,46 @@ inline std::optional<std::string> read_file(const std::filesystem::path& path) {
     return std::move(ss).str();
 }
 
+// A disk component must be admitted by this predicate (name, source)->load? — the
+// load-time trust gate. Empty means "admit all" (the permissive default the unit
+// tests use); load_components installs a real gate.
+using TrustFn = std::function<bool(const std::string& name, const std::string& source)>;
+
+inline runtime::TrustPolicy trust_policy_from_env() {
+    const char* p = std::getenv("ASTRITE_TRUST_POLICY");
+    return (p != nullptr && std::string_view(p) == "strict") ? runtime::TrustPolicy::strict
+                                                             : runtime::TrustPolicy::warn;
+}
+
+// Evaluate one disk source against its trust record + policy, log the outcome,
+// and return whether it may load. The control-plane reservation guarantees only
+// a human (via the consent flow) can ever have written the record.
+inline bool admit_disk_component(const std::string& name, const std::string& source,
+                                 const std::filesystem::path& trust_dir,
+                                 runtime::TrustPolicy policy) {
+    auto rec = runtime::read_trust_record(trust_dir, name);
+    runtime::TrustState st = runtime::evaluate_trust(source, rec);
+    if (st == runtime::TrustState::trusted) {
+        return true;
+    }
+    const char* why = st == runtime::TrustState::untrusted_new ? "unapproved" : "changed since approval";
+    if (runtime::should_load(st, policy)) {
+        std::fprintf(stderr, "[trust] %s: %s — loaded (policy=warn; approve to pin it)\n",
+                     name.c_str(), why);
+        return true;
+    }
+    std::fprintf(stderr, "[trust] %s: %s — REFUSED (policy=strict)\n", name.c_str(), why);
+    return false;
+}
+
 // Pick up NEW components (names not already present) from a directory of .json
-// files — repo-local task verbs today, trust-gated self-authored components at
-// M9. Same-name files are left to the embedded-override path; this only adds.
-// Fail closed: a parse error or name/file mismatch rejects the whole load.
+// files — repo-local task verbs and (consent-approved) self-authored components.
+// Same-name files are left to the embedded-override path; this only adds. Fail
+// closed: a parse error or name/file mismatch rejects the whole load. A component
+// the trust gate refuses is skipped (not an error).
 inline std::expected<void, std::string> merge_dir_components(kernel::ComponentMap& map,
-                                                             const std::filesystem::path& dir) {
+                                                             const std::filesystem::path& dir,
+                                                             const TrustFn& admit = {}) {
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec)) {
         return {}; // no directory: nothing to add
@@ -57,6 +95,9 @@ inline std::expected<void, std::string> merge_dir_components(kernel::ComponentMa
         if (!source.has_value()) {
             return std::unexpected("cannot read " + path.string());
         }
+        if (admit && !admit(stem, *source)) {
+            continue; // trust gate refused it; admit_disk_component already logged
+        }
         auto component = schema::load_component_jsonc(*source);
         if (!component.has_value()) {
             return std::unexpected(stem + ": " + component.error().message);
@@ -65,8 +106,6 @@ inline std::expected<void, std::string> merge_dir_components(kernel::ComponentMa
             return std::unexpected("component file " + path.filename().string() +
                                    " declares mismatched name `" + component->name + "`");
         }
-        std::fprintf(stderr, "[component] %s loaded from %s (trust gate arrives at M9)\n",
-                     stem.c_str(), path.string().c_str());
         map.emplace(component->name, std::move(*component));
     }
     return {};
@@ -74,17 +113,25 @@ inline std::expected<void, std::string> merge_dir_components(kernel::ComponentMa
 
 inline std::expected<kernel::ComponentMap, std::string> load_components() {
     kernel::ComponentMap map;
+    const std::filesystem::path trust_dir = ".astrite/trust";
+    const runtime::TrustPolicy policy = trust_policy_from_env();
+    const TrustFn admit = [trust_dir, policy](const std::string& name, const std::string& source) {
+        return admit_disk_component(name, source, trust_dir, policy);
+    };
+
     for (const auto& [name, embedded] : components::ALL) {
-        std::string source(embedded);
+        std::string source(embedded); // embedded defaults are compiled-in, implicitly trusted
         const std::filesystem::path override_path =
             std::filesystem::path(".astrite/components") / (std::string(name) + ".json");
         if (auto disk = read_file(override_path)) {
-            // NOTE(M9): overrides will be trust-gated against the embedded baseline
-            // (capability/risk diffs + hash-pinned records). The sprint loads them
-            // un-gated but never silently.
-            std::fprintf(stderr, "[override] %s loaded from %s (trust gate arrives at M9)\n",
-                         std::string(name).c_str(), override_path.string().c_str());
-            source = std::move(*disk);
+            // An override replaces a trusted baseline, so it must clear the gate.
+            // If it doesn't, fall back to the embedded default rather than fail.
+            if (admit(std::string(name), *disk)) {
+                source = std::move(*disk);
+            } else {
+                std::fprintf(stderr, "[override] %s: falling back to the embedded default\n",
+                             std::string(name).c_str());
+            }
         }
         auto component = schema::load_component_jsonc(source);
         if (!component.has_value()) {
@@ -96,8 +143,9 @@ inline std::expected<kernel::ComponentMap, std::string> load_components() {
         }
         map.emplace(component->name, std::move(*component));
     }
-    // Then repo-local components that aren't embedded at all (e.g. task verbs).
-    if (auto added = merge_dir_components(map, ".astrite/components"); !added.has_value()) {
+    // Then repo-local components that aren't embedded at all (e.g. task verbs),
+    // each subject to the same trust gate.
+    if (auto added = merge_dir_components(map, ".astrite/components", admit); !added.has_value()) {
         return std::unexpected(added.error());
     }
     return map;

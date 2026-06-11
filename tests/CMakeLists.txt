@@ -13,6 +13,8 @@ add_executable(astrite_tests
     sandbox_test.cpp
     trust_test.cpp
     fs_helper_test.cpp
+    sha256_test.cpp
+    trust_store_test.cpp
     range_test.cpp
     task_test.cpp
     components_test.cpp
