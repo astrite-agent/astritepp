@@ -10,7 +10,8 @@
 #include "kernel/eval.hpp"
 #include "kernel/prims.hpp"
 #include "kernel/trust.hpp"
-#include "llm/client.hpp"
+#include "llm/openai_compat.hpp"
+#include "llm/provider.hpp"
 #include "runtime/fs_read_args.hpp"
 #include "runtime/proposals.hpp"
 #include "runtime/task_args.hpp"
@@ -59,10 +60,11 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
         if (!cfg.has_value()) {
             return std::unexpected("runtime: " + cfg.error());
         }
-        auto client = std::make_shared<llm::Client>(std::move(*cfg));
-        opts.chat = [client](const Value& messages, const Value& tools,
-                             llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
-            return client->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
+        std::shared_ptr<llm::Provider> provider =
+            std::make_shared<llm::OpenAiCompatProvider>(std::move(*cfg));
+        opts.chat = [provider](const Value& messages, const Value& tools,
+                               llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
+            return provider->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
         };
     }
 

@@ -1,6 +1,6 @@
 #include <doctest.h>
 
-#include "llm/client.hpp"
+#include "llm/openai_compat.hpp"
 #include "schema/value_json.hpp"
 
 using namespace astrite;

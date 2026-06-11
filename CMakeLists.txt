@@ -59,7 +59,8 @@ target_link_libraries(astrite_core PUBLIC third_party astrite_flags)
 # System libcurl: trust class of libc, not a vendored dependency (DESIGN §14).
 find_package(CURL REQUIRED)
 add_library(astrite_llm STATIC
-    src/llm/client.cpp
+    src/llm/http.cpp
+    src/llm/openai_compat.cpp
 )
 target_link_libraries(astrite_llm PUBLIC astrite_core CURL::libcurl)
 

@@ -22,6 +22,9 @@
 
 namespace astrite::llm {
 
+// A live token sink for streamed assistant text, shared by every provider.
+using DeltaSink = std::function<void(std::string_view)>;
+
 struct ToolCall {
     std::string id;
     std::string name;
@@ -32,7 +35,9 @@ struct Usage {
     int prompt_tokens = 0;
     int completion_tokens = 0;
     int total_tokens = 0;
-    bool present = false; // true once the server reported usage
+    int cache_read_tokens = 0;  // prompt tokens served from cache (cheap)
+    int cache_write_tokens = 0; // prompt tokens written to cache this call
+    bool present = false;       // true once the server reported usage
 };
 
 struct CompletedTurn {
@@ -40,6 +45,12 @@ struct CompletedTurn {
     std::vector<ToolCall> tool_calls;
     std::string finish_reason;
     Usage usage;
+};
+
+// One entry in a provider's model catalog. `context_limit` is 0 when unknown.
+struct ModelInfo {
+    std::string id;
+    int context_limit = 0;
 };
 
 namespace wire {
@@ -81,7 +92,7 @@ struct Chunk {
 
 class StreamAccumulator {
 public:
-    using DeltaSink = std::function<void(std::string_view)>;
+    using DeltaSink = llm::DeltaSink; // alias kept for existing call sites
 
     StreamAccumulator() = default;
     explicit StreamAccumulator(DeltaSink on_delta) : on_delta_(std::move(on_delta)) {}

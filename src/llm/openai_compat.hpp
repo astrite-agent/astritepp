@@ -1,14 +1,16 @@
 #pragma once
 
-// OpenAI-compatible streaming client over system libcurl: blocking easy-handle,
-// write callback feeding the SSE accumulator, cancellation via the progress
-// callback checking a stop_token. No async runtime (DESIGN §8).
+// The OpenAI-compatible provider: POST {base}/chat/completions with stream:true,
+// SSE deltas folded by StreamAccumulator. Works against any chat-completions
+// endpoint (OpenAI, local servers, gateways). OpenAI-native features (Responses
+// API, reasoning) live in the separate GptProvider.
 
 #include <expected>
 #include <stop_token>
 #include <string>
-#include <string_view>
+#include <vector>
 
+#include "llm/provider.hpp"
 #include "llm/sse.hpp"
 #include "schema/value.hpp"
 
@@ -32,15 +34,19 @@ struct Config {
                                              const schema::Value& messages,
                                              const schema::Value& tools);
 
-class Client {
+class OpenAiCompatProvider : public Provider {
 public:
-    explicit Client(Config cfg) : cfg_(std::move(cfg)) {}
+    explicit OpenAiCompatProvider(Config cfg) : cfg_(std::move(cfg)) {}
 
-    // Blocking POST {base}/chat/completions with stream:true. Returns the settled
-    // turn; transport failures, non-200 statuses, and cancellation are errors.
+    [[nodiscard]] std::string name() const override { return "openai-compat"; }
+    [[nodiscard]] std::string model() const override { return cfg_.model; }
+
     [[nodiscard]] std::expected<CompletedTurn, std::string>
-    stream_chat(const schema::Value& messages, const schema::Value& tools,
-                StreamAccumulator::DeltaSink on_delta = {}, std::stop_token cancel = {});
+    stream_chat(const schema::Value& messages, const schema::Value& tools, DeltaSink on_delta,
+                std::stop_token cancel) override;
+
+    [[nodiscard]] std::expected<std::vector<ModelInfo>, std::string> list_models() override;
+    [[nodiscard]] int context_limit(const std::string& model_id) const override;
 
 private:
     Config cfg_;
