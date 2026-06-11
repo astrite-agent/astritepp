@@ -35,6 +35,7 @@
 #include "frontends/tui/markdown_render.hpp"
 #include "frontends/tui/segment_render.hpp"
 #include "frontends/tui/transcript.hpp"
+#include "frontends/tui/transcript_view.hpp"
 #include "frontends/tui/view_state.hpp"
 #include "frontends/tui/widgets.hpp"
 #include "runtime/runtime.hpp"
@@ -246,10 +247,13 @@ int main(int argc, char** argv) {
     bool config_shown = false; // drives the FTXUI Modal component (focusable checkboxes)
     bool pref_markdown = true;
     bool pref_index = false;
+    // The transcript as literal focusable FTXUI components (M8). FTXUI manages
+    // focus among segments; `body_sel` selects the transcript pane (0) vs the
+    // input (1) so focus flows to the right place.
+    astrite::tui::TranscriptView tv(transcript, &pref_markdown, &pref_index);
+    int body_sel = 1;
     int cursor_pos = 0;               // shared with the Input widget (readline editing)
     bool paste_mode = false;          // inside a bracketed paste (newlines = literal, not submit)
-    std::vector<Box> seg_boxes;       // per-segment on-screen boxes (for click hit-testing)
-    int press_x = -1, press_y = -1;   // left-press position, to distinguish click from drag-select
     astrite::tui::History history;    // Up/Down recall + Ctrl-R search
     bool rsearch = false;             // reverse-i-search mode
     std::string rquery;               // the search query being typed
@@ -299,7 +303,6 @@ int main(int argc, char** argv) {
         }
     };
 
-    auto seg_count = [&] { return static_cast<int>(transcript.segments().size()); };
     auto turn_active = [&] { return transcript.turn_active(); };
 
     // Pump runtime events onto the UI thread. The Closure applies the transcript
@@ -337,14 +340,17 @@ int main(int argc, char** argv) {
         } else if (n == "/clear") {
             if (!turn_active()) {
                 transcript.clear();
-                view_state.focus_input();
+                body_sel = 1;
             }
         } else if (n == "/focus") {
-            view_state.toggle_focus(seg_count());
+            body_sel = body_sel == 0 ? 1 : 0;
+            if (body_sel == 0) {
+                tv.select(tv.count() - 1);
+            }
         } else if (n == "/collapse") {
-            view_state.collapse_all(seg_count());
+            tv.collapse_all();
         } else if (n == "/expand") {
-            view_state.expand_all();
+            tv.expand_all();
         } else if (n == "/top") {
             following = false;
             scroll = 0.0f;
@@ -439,30 +445,24 @@ int main(int argc, char** argv) {
     input_opt.on_change = [&] { history.reset(); }; // typing exits history navigation
     Component input = Input(&input_text, input_opt);
 
-    Component view = Renderer(input, [&] {
-        Elements lines;
-        bool active = false;
-        int count = 0;
-        const bool transcript_focus = view_state.focus() == at::Focus::transcript;
-        {
-            active = transcript.turn_active();
-            const auto& segs = transcript.segments();
-            count = static_cast<int>(segs.size());
-            seg_boxes.assign(static_cast<size_t>(count), Box{}); // reflect fills these
-            for (int i = 0; i < count; ++i) {
-                const Segment& seg = segs[static_cast<size_t>(i)];
-                // reflect captures each segment's on-screen box (Frame writes child
-                // boxes in screen coords) so a click can be hit-tested to a segment.
-                lines.push_back(render_segment(seg, i,
-                                               transcript_focus && view_state.selected() == i,
-                                               view_state.is_collapsed(i),
-                                               transcript_focus || pref_index, pref_markdown) |
-                                reflect(seg_boxes[static_cast<size_t>(i)]));
-            }
+    // The interactive tree: the transcript (real focusable segment components) and
+    // the input, with `body_sel` choosing which has FTXUI focus. The Renderer below
+    // draws chrome around them; the outer CatchEvent handles global/mode keys.
+    Component body = Container::Vertical({tv.component(), input}, &body_sel);
+
+    Component view = Renderer(body, [&] {
+        tv.sync(); // reconcile segment components before rendering (safe: before iterate)
+        const bool transcript_focus = body_sel == 0;
+        const int count = tv.count();
+        if (transcript_focus) {
+            tv.select(tv.selected()); // clamp into range as the transcript grows/shrinks
         }
-        if (lines.empty()) {
-            lines.push_back(text("Ask astrite++ to read, search, or edit the workspace.") | dim);
-        }
+        const bool active = transcript.turn_active();
+
+        Element transcript_el = count > 0
+                                    ? tv.component()->Render()
+                                    : text("Ask astrite++ to read, search, or edit the workspace.") |
+                                          dim;
 
         if (active) {
             screen.RequestAnimationFrame(); // keep frames coming while the turn runs
@@ -492,14 +492,18 @@ int main(int argc, char** argv) {
             text(" "),
         });
 
-        // Mouse drag-to-select is built into FTXUI (handled in the loop after our
-        // CatchEvent passes the event through); style the selection so it reads as
-        // intentional. GetSelection() can later feed a copy affordance.
-        Element body = vbox(std::move(lines)) | selectionBackgroundColor(Color::Blue) |
-                       selectionForegroundColor(Color::White) | focusPositionRelative(0.0f, scroll) |
-                       vscroll_indicator | yframe | flex;
+        // In transcript focus, follow the selected segment; otherwise honor the
+        // manual scroll (wheel / PgUp / End-follow). Mouse drag-to-select is FTXUI
+        // built-in; style the selection so it reads as intentional.
+        const float pos = (transcript_focus && count > 1)
+                              ? static_cast<float>(tv.selected()) / static_cast<float>(count - 1)
+                              : scroll;
+        Element transcript_pane = transcript_el | selectionBackgroundColor(Color::Blue) |
+                                  selectionForegroundColor(Color::White) |
+                                  focusPositionRelative(0.0f, pos) | vscroll_indicator | yframe |
+                                  flex;
 
-        Elements stack{header, separator(), body, separator()};
+        Elements stack{header, separator(), transcript_pane, separator()};
 
         // Completion popup: a bare leading-slash token in the input box.
         auto candidates = astrite::tui::complete(input_text);
@@ -596,26 +600,27 @@ int main(int argc, char** argv) {
             return true;
         }
 
-        // Transcript focus: segment navigation + collapse.
-        if (view_state.focus() == at::Focus::transcript) {
-            int count = seg_count();
+        // Transcript focus: navigate + collapse the real segment components. We set
+        // the selector (FTXUI focus follows it); Enter/space toggle the focused one.
+        if (body_sel == 0) {
+            const int count = tv.count();
             constexpr int kHalfPage = 10;
             if (e == Event::Tab || e == Event::Escape) {
-                view_state.focus_input();
+                body_sel = 1; // back to input
             } else if (e == Event::ArrowUp || e == Event::Character("k")) {
-                view_state.select_prev(count);
+                tv.select(tv.selected() - 1);
             } else if (e == Event::ArrowDown || e == Event::Character("j")) {
-                view_state.select_next(count);
+                tv.select(tv.selected() + 1);
             } else if (e.input() == "\x15") { // Ctrl-U
-                view_state.select_relative(-kHalfPage, count);
+                tv.select(tv.selected() - kHalfPage);
             } else if (e.input() == "\x04") { // Ctrl-D
-                view_state.select_relative(kHalfPage, count);
+                tv.select(tv.selected() + kHalfPage);
             } else if (e == Event::Home || e == Event::Character("g")) {
-                view_state.select_first(count);
+                tv.select(0);
             } else if (e == Event::End || e == Event::Character("G")) {
-                view_state.select_last(count);
+                tv.select(count - 1);
             } else if (e == Event::Return || e == Event::Character(" ")) {
-                view_state.toggle_collapse_selected();
+                tv.toggle_selected();
             }
             return true;
         }
@@ -712,8 +717,9 @@ int main(int argc, char** argv) {
                 popup_sel = std::max(popup_sel - 1, 0);
                 return true;
             }
-        } else if (e == Event::Tab) {
-            view_state.focus_transcript(seg_count());
+        } else if (e == Event::Tab && tv.count() > 0) {
+            body_sel = 0;                // focus the transcript
+            tv.select(tv.count() - 1);   // start at the newest segment
             return true;
         }
 
@@ -820,25 +826,9 @@ int main(int argc, char** argv) {
                 following = scroll >= 0.999f;
                 return true;
             }
-            // Left press records the position; a release at the same cell is a
-            // click (toggle the clicked segment), while a drag is left to FTXUI's
-            // built-in text selection.
-            if (e.mouse().button == Mouse::Left && e.mouse().motion == Mouse::Pressed) {
-                press_x = e.mouse().x;
-                press_y = e.mouse().y;
-                return false; // allow drag-selection to begin
-            }
-            if (e.mouse().button == Mouse::Left && e.mouse().motion == Mouse::Released &&
-                e.mouse().x == press_x && e.mouse().y == press_y) {
-                for (std::size_t i = 0; i < seg_boxes.size(); ++i) {
-                    if (seg_boxes[i].Contain(e.mouse().x, e.mouse().y)) {
-                        view_state.focus_segment(static_cast<int>(i),
-                                                 static_cast<int>(seg_boxes.size()));
-                        view_state.toggle_collapse(static_cast<int>(i));
-                        return true;
-                    }
-                }
-            }
+            // Other mouse events fall through to the components: clicking a segment
+            // focuses it (the focusable Renderer takes focus, which sets body_sel and
+            // the selected segment); dragging is FTXUI's built-in text selection.
         }
         return false;
     });
