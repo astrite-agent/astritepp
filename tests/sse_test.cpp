@@ -106,6 +106,26 @@ TEST_CASE("malformed chunks and unknown fields are tolerated, never fatal") {
     CHECK(acc.settle().text == "ok");
 }
 
+TEST_CASE("usage is captured from the final usage chunk (empty choices)") {
+    StreamAccumulator acc;
+    acc.feed(chunk(R"({"choices":[{"delta":{"content":"hi"},"index":0}]})"));
+    acc.feed(chunk(
+        R"({"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":8,"total_tokens":128}})"));
+    acc.feed("data: [DONE]\n\n");
+    CompletedTurn turn = acc.settle();
+    CHECK(turn.text == "hi");
+    CHECK(turn.usage.present);
+    CHECK(turn.usage.prompt_tokens == 120);
+    CHECK(turn.usage.completion_tokens == 8);
+    CHECK(turn.usage.total_tokens == 128);
+}
+
+TEST_CASE("no usage chunk leaves usage absent") {
+    StreamAccumulator acc;
+    acc.feed(chunk(R"({"choices":[{"delta":{"content":"hi"},"index":0}]})"));
+    CHECK_FALSE(acc.settle().usage.present);
+}
+
 TEST_CASE("assistant_message builds the session record: content null for pure tool turns") {
     StreamAccumulator acc;
     acc.feed(chunk(

@@ -37,6 +37,9 @@ std::string build_request_body(const std::string& model, const schema::Value& me
     req.set("model", Value::str(model));
     req.set("messages", messages);
     req.set("stream", Value::boolean(true));
+    Value stream_options = Value::object();
+    stream_options.set("include_usage", Value::boolean(true)); // ask for a final usage chunk
+    req.set("stream_options", std::move(stream_options));
     if (const Value::List* list = tools.as_list(); list != nullptr && !list->empty()) {
         req.set("tools", tools);
     }

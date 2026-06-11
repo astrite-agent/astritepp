@@ -244,7 +244,9 @@ void Runtime::register_effects() {
             if (!turn.has_value()) {
                 return std::unexpected(kernel::KernelError{"llm.stream: " + turn.error()});
             }
-            events_.push(AssistantSettled{turn->text});
+            events_.push(AssistantSettled{turn->text, turn->usage.prompt_tokens,
+                                          turn->usage.completion_tokens, turn->usage.total_tokens,
+                                          turn->usage.present});
 
             Value::List calls;
             calls.reserve(turn->tool_calls.size());

@@ -28,10 +28,18 @@ struct ToolCall {
     std::string arguments; // raw JSON string, untrusted until json-coerced downstream
 };
 
+struct Usage {
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    int total_tokens = 0;
+    bool present = false; // true once the server reported usage
+};
+
 struct CompletedTurn {
     std::string text;
     std::vector<ToolCall> tool_calls;
     std::string finish_reason;
+    Usage usage;
 };
 
 namespace wire {
@@ -59,8 +67,14 @@ struct Choice {
     std::optional<std::string> finish_reason;
     std::optional<std::int64_t> index;
 };
+struct UsageWire {
+    std::optional<int> prompt_tokens;
+    std::optional<int> completion_tokens;
+    std::optional<int> total_tokens;
+};
 struct Chunk {
     std::optional<std::vector<Choice>> choices;
+    std::optional<UsageWire> usage; // final chunk when stream_options.include_usage
 };
 
 } // namespace wire
@@ -90,6 +104,7 @@ public:
         CompletedTurn turn;
         turn.text = text_;
         turn.finish_reason = finish_reason_;
+        turn.usage = usage_;
         for (const auto& [index, accum] : calls_) {
             if (accum.has_name) {
                 turn.tool_calls.push_back({accum.id, accum.name, accum.arguments});
@@ -121,6 +136,15 @@ private:
         wire::Chunk chunk{};
         if (glz::read<glz::opts{.error_on_unknown_keys = false}>(chunk, payload)) {
             return; // tolerate malformed chunks; the settled value is the contract
+        }
+        // Usage arrives in a final chunk that often has empty choices, so read it
+        // before the choices early-return.
+        if (chunk.usage.has_value()) {
+            const wire::UsageWire& u = *chunk.usage;
+            usage_.prompt_tokens = u.prompt_tokens.value_or(usage_.prompt_tokens);
+            usage_.completion_tokens = u.completion_tokens.value_or(usage_.completion_tokens);
+            usage_.total_tokens = u.total_tokens.value_or(usage_.total_tokens);
+            usage_.present = true;
         }
         if (!chunk.choices.has_value()) {
             return;
@@ -175,6 +199,7 @@ private:
     std::string text_;
     std::map<std::int64_t, Accum> calls_;
     std::string finish_reason_;
+    Usage usage_;
     bool done_ = false;
 };
 

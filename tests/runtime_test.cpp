@@ -190,8 +190,8 @@ size_t count_of(const std::vector<runtime::Event>& events) {
 TEST_CASE("a full turn: tool dispatch loops back through the session, then settles") {
     fs::path file = temp_session();
     ScriptedChat chat;
-    chat.script.push_back({"", {{"call_1", "echo", R"({"text": "hi"})"}}, "tool_calls"});
-    chat.script.push_back({"Echoed it for you.", {}, "stop"});
+    chat.script.push_back({"", {{"call_1", "echo", R"({"text": "hi"})"}}, "tool_calls", {}});
+    chat.script.push_back({"Echoed it for you.", {}, "stop", {}});
 
     auto rt = runtime::Runtime::create(test_options(file, chat.fn()));
     REQUIRE(rt.has_value());
@@ -227,8 +227,8 @@ TEST_CASE("a full turn: tool dispatch loops back through the session, then settl
 TEST_CASE("transcript continuity across submits; system prompt seeded exactly once") {
     fs::path file = temp_session();
     ScriptedChat chat;
-    chat.script.push_back({"first answer", {}, "stop"});
-    chat.script.push_back({"second answer", {}, "stop"});
+    chat.script.push_back({"first answer", {}, "stop", {}});
+    chat.script.push_back({"second answer", {}, "stop", {}});
 
     auto rt = runtime::Runtime::create(test_options(file, chat.fn()));
     REQUIRE(rt.has_value());
@@ -284,7 +284,7 @@ TEST_CASE("model-callable tool definitions are derived from tool components") {
             CHECK(*def.get("function")->get("name") == Value::str("echo"));
             CHECK(def.get("function")->get("parameters") != nullptr);
             saw_tools = true;
-            return llm::CompletedTurn{"ok", {}, "stop"};
+            return llm::CompletedTurn{"ok", {}, "stop", {}};
         }));
     REQUIRE(rt.has_value());
     REQUIRE((*rt)->submit_user_message("x"));

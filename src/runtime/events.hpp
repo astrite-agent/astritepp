@@ -20,6 +20,10 @@ struct AssistantDelta {
 };
 struct AssistantSettled {
     std::string text;
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    int total_tokens = 0;
+    bool has_usage = false;
 };
 struct ToolStarted {
     std::string id;

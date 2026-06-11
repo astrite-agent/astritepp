@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <ftxui/component/component.hpp>
@@ -188,8 +189,15 @@ agent is working.)";
     return astrite::tui::render_markdown(kHelp);
 }
 
+struct UsageView {
+    int prompt = 0, completion = 0, total = 0;
+    bool present = false;
+    const std::vector<int>* history = nullptr;
+    int context_window = 128000;
+};
+
 Element status_modal_content(const std::string& model, const std::string& workspace,
-                             const astrite::tui::Transcript& t, bool active) {
+                             const astrite::tui::Transcript& t, bool active, const UsageView& u) {
     int tools = 0, turns = 0;
     for (const Segment& s : t.segments()) {
         if (s.kind == Segment::Kind::tool) {
@@ -198,7 +206,7 @@ Element status_modal_content(const std::string& model, const std::string& worksp
             ++turns;
         }
     }
-    Table table(std::vector<std::vector<Element>>{
+    std::vector<std::vector<Element>> body{
         {text("model"), text(model)},
         {text("workspace"), text(workspace)},
         {text("segments"), text(std::to_string(t.segments().size()))},
@@ -206,10 +214,52 @@ Element status_modal_content(const std::string& model, const std::string& worksp
         {text("tool calls"), text(std::to_string(tools))},
         {text("state"), text(active ? "working" : "ready") |
                             color(active ? Color::YellowLight : Color::GreenLight)},
-    });
+    };
+    if (u.present) {
+        body.push_back({text("prompt tokens"), text(std::to_string(u.prompt))});
+        body.push_back({text("completion tokens"), text(std::to_string(u.completion))});
+        body.push_back({text("total tokens"), text(std::to_string(u.total))});
+    }
+    Table table(body);
     table.SelectAll().Border(LIGHT);
     table.SelectColumn(0).Decorate(dim);
-    return table.Render();
+
+    Elements out{table.Render()};
+    if (u.present) {
+        const float fill = std::min(1.0f, static_cast<float>(u.prompt) /
+                                              static_cast<float>(u.context_window));
+        const int pct = static_cast<int>(fill * 100.0f);
+        out.push_back(text(""));
+        out.push_back(text("Context window") | bold | color(Color::YellowLight));
+        out.push_back(hbox({
+            gauge(fill) | color(pct >= 80 ? Color::RedLight : Color::GreenLight) | flex,
+            text(" " + std::to_string(u.prompt) + " / " + std::to_string(u.context_window) + "  (" +
+                 std::to_string(pct) + "%)") |
+                dim,
+        }));
+        if (u.history != nullptr && u.history->size() >= 2) {
+            const std::vector<int>& h = *u.history;
+            out.push_back(text(""));
+            out.push_back(text("Total tokens / model call") | bold | color(Color::YellowLight));
+            out.push_back(graph([&h](int w, int hh) {
+                              std::vector<int> cols(static_cast<size_t>(std::max(0, w)), 0);
+                              int maxv = 1;
+                              for (int v : h) {
+                                  maxv = std::max(maxv, v);
+                              }
+                              for (int i = 0; i < w; ++i) {
+                                  int idx = static_cast<int>(h.size()) - w + i;
+                                  if (idx >= 0) {
+                                      cols[static_cast<size_t>(i)] =
+                                          h[static_cast<size_t>(idx)] * hh / maxv;
+                                  }
+                              }
+                              return cols;
+                          }) |
+                          color(Color::CyanLight) | size(HEIGHT, EQUAL, 6));
+        }
+    }
+    return vbox(std::move(out));
 }
 
 } // namespace
@@ -282,6 +332,29 @@ int main(int argc, char** argv) {
     const char* env_policy = std::getenv("ASTRITE_AUTHORITY_POLICY");
     const std::string policy = env_policy != nullptr ? env_policy : "review";
     const std::string session_path = ".astrite/sessions/current.jsonl";
+    const char* env_ctx = std::getenv("OPENAI_CONTEXT_WINDOW");
+    const int context_window = env_ctx != nullptr ? std::max(1, std::atoi(env_ctx)) : 128000;
+
+    // Token usage, updated from AssistantSettled events (UI thread only).
+    struct UsageState {
+        int prompt = 0, completion = 0, total = 0;
+        bool present = false;
+        std::vector<int> history; // total_tokens per model call, for the graph
+    } usage;
+    auto apply_event = [&](const astrite::runtime::Event& ev) {
+        transcript.apply(ev);
+        if (const auto* s = std::get_if<astrite::runtime::AssistantSettled>(&ev);
+            s != nullptr && s->has_usage) {
+            usage.prompt = s->prompt_tokens;
+            usage.completion = s->completion_tokens;
+            usage.total = s->total_tokens;
+            usage.present = true;
+            usage.history.push_back(s->total_tokens);
+            if (usage.history.size() > 512) {
+                usage.history.erase(usage.history.begin());
+            }
+        }
+    };
 
     auto seg_count = [&] { return static_cast<int>(transcript.segments().size()); };
     auto turn_active = [&] { return transcript.turn_active(); };
@@ -293,7 +366,7 @@ int main(int argc, char** argv) {
     // (verified empirically). Both are queued in order, so apply-then-render.
     std::jthread pump([&] {
         while (auto event = runtime.events().pop()) {
-            screen.Post([&transcript, ev = std::move(*event)] { transcript.apply(ev); });
+            screen.Post([&apply_event, ev = std::move(*event)] { apply_event(ev); });
             screen.PostEvent(Event::Custom);
         }
     });
@@ -412,11 +485,18 @@ int main(int argc, char** argv) {
             active ? hbox({spinner(5, static_cast<size_t>(elapsed_ms / 90)),
                            text(" working") | color(Color::YellowLight), text("  esc cancel") | dim})
                    : text("ready") | color(Color::GreenLight);
+        Element ctx_indicator = text("");
+        if (usage.present) {
+            const int pct = std::min(100, usage.prompt * 100 / std::max(1, context_window));
+            ctx_indicator = text("· ctx " + std::to_string(pct) + "% ") |
+                            color(pct >= 80 ? Color::RedLight : Color::GrayLight);
+        }
         Element header = hbox({
             text(" astrite++ ") | bold | bgcolor(Color::Blue) | color(Color::White),
             text("  " + model + "  ") | color(Color::GrayLight),
             text("· " + workspace + " ") | dim,
             filler(),
+            ctx_indicator,
             transcript_focus ? text("[transcript] ") | color(Color::CyanLight) : text(""),
             status,
             text(" "),
@@ -476,7 +556,10 @@ int main(int argc, char** argv) {
                 break;
             case at::Modal::status: {
                 title = "status";
-                content = status_modal_content(model, workspace, transcript, active);
+                content = status_modal_content(
+                    model, workspace, transcript, active,
+                    UsageView{usage.prompt, usage.completion, usage.total, usage.present,
+                              &usage.history, context_window});
                 break;
             }
             case at::Modal::config:
