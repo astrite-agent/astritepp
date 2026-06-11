@@ -15,12 +15,15 @@
 namespace astrite::tui {
 
 struct Segment {
-    enum class Kind { user, assistant, tool, error };
+    enum class Kind { user, assistant, tool, error, proposal };
     Kind kind = Kind::user;
     std::string text;        // user input / accumulated assistant text / error message
     std::string tool_name;   // tool segments only
     std::string tool_args;
     std::string tool_result;
+    // proposal segments: a model-authored component awaiting human review.
+    std::string risk;
+    std::vector<std::string> caps;
     bool done = false;
 };
 
@@ -66,6 +69,16 @@ public:
                             break;
                         }
                     }
+                },
+                [&](const runtime::ComponentProposed& p) {
+                    Segment seg;
+                    seg.kind = Segment::Kind::proposal;
+                    seg.tool_name = p.name;
+                    seg.text = (p.replaces_existing ? "replaces " : "new component ") + p.name;
+                    seg.risk = p.risk;
+                    seg.caps = p.caps;
+                    seg.done = true;
+                    segments_.push_back(std::move(seg));
                 },
                 [&](const runtime::TurnFinished&) {
                     if (Segment* open = open_assistant_or_null()) {

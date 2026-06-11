@@ -101,6 +101,23 @@ Element segment_body(const Segment& s, bool collapsed, bool markdown) {
     }
     case Segment::Kind::error:
         return hbox({text("✗ ") | bold, paragraph(s.text)}) | color(Color::RedLight) | borderLight;
+    case Segment::Kind::proposal: {
+        // Kernel chrome — deliberately a distinct visual language from model
+        // content (double border, magenta) so a proposal can never be mistaken
+        // for, or forged by, model output.
+        Elements rows;
+        rows.push_back(hbox({text("⛨ component proposal: ") | bold, text(s.tool_name) | bold}));
+        std::string meta = "risk " + s.risk;
+        if (!s.caps.empty()) {
+            meta += " · caps ";
+            for (std::size_t i = 0; i < s.caps.size(); ++i) {
+                meta += (i != 0 ? ", " : "") + s.caps[i];
+            }
+        }
+        rows.push_back(text(meta));
+        rows.push_back(text("pending review — approve with /approve " + s.tool_name) | dim);
+        return vbox(std::move(rows)) | borderDouble | color(Color::Magenta);
+    }
     }
     return text("");
 }

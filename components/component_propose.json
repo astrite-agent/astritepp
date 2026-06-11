@@ -1,0 +1,20 @@
+{
+  // Submit a model-authored component for human review. The kernel validates and
+  // authority-folds the candidate, stages it under .astrite/proposals/, and
+  // announces it as kernel chrome. Proposing grants NOTHING — a human must
+  // approve it (which installs it and pins a trust record). The model cannot
+  // write the control plane itself; this effect is its only authoring path.
+  "component": "component_propose",
+  "kind": "tool",
+  "caps": ["component.propose"],
+  "description": "Propose a new component for human review (validated + staged, not active until approved). Use component_check first to self-validate.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "source": {"type": "string", "description": "The candidate component as JSONC text."}
+    },
+    "required": ["source"]
+  },
+  "tree": {"do": "component.propose", "with": {"source": {"ref": "input.source"}}, "as": "out"},
+  "output": {"ref": "out"}
+}

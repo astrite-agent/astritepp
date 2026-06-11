@@ -88,6 +88,11 @@ int main(int argc, char** argv) {
                         std::printf("[tool %s -> %s]\n", t.name.c_str(), t.content.c_str());
                         return false;
                     },
+                    [&](const runtime::ComponentProposed& p) {
+                        std::printf("[proposal %s (%s risk) staged for review -> %s]\n",
+                                    p.name.c_str(), p.risk.c_str(), p.staged_path.c_str());
+                        return false;
+                    },
                     [&](const runtime::TurnFinished&) { return true; },
                     [&](const runtime::TurnError& e) {
                         std::fprintf(stderr, "\nerror: %s\n", e.message.c_str());

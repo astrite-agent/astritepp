@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace astrite::runtime {
 
@@ -35,13 +36,25 @@ struct ToolFinished {
     std::string name;
     std::string content;
 };
+// A model-authored component staged for human review. Authority is NOT granted
+// by this event — it announces a candidate the human can later approve (which is
+// what writes the trust record and installs it). The frontend renders this as
+// root-owned kernel chrome, never as model-styleable content.
+struct ComponentProposed {
+    std::string name;
+    std::string kind;
+    std::vector<std::string> caps;
+    std::string risk;
+    std::string staged_path;     // .astrite/proposals/<name>.json
+    bool replaces_existing = false; // true if a component of this name is already loaded
+};
 struct TurnFinished {};
 struct TurnError {
     std::string message;
 };
 
 using Event = std::variant<Started, AssistantDelta, AssistantSettled, ToolStarted, ToolFinished,
-                           TurnFinished, TurnError>;
+                           ComponentProposed, TurnFinished, TurnError>;
 
 class EventChannel {
 public:

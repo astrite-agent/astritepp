@@ -9,8 +9,10 @@
 #include "kernel/trust.hpp"
 #include "llm/client.hpp"
 #include "runtime/fs_read_args.hpp"
+#include "runtime/proposals.hpp"
 #include "runtime/task_args.hpp"
 #include "sandbox/sandbox.hpp"
+#include "schema/load.hpp"
 #include "util/control_plane.hpp"
 
 namespace astrite::runtime {
@@ -245,6 +247,50 @@ void Runtime::register_effects() {
                 return std::unexpected(ts.error());
             }
             return task_result_value(sandbox::run_task(*ts));
+        });
+
+    registry_.add_effect(
+        "component.propose", "component.propose",
+        [this, base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+            // The model hands the kernel a candidate component (it cannot write
+            // .astrite itself). The kernel validates + authority-folds it, stages
+            // it for human review, and announces it. Proposing grants NOTHING —
+            // acceptance (human, B4) is what installs it and pins a trust record.
+            const Value* src = args.get("source");
+            if (src == nullptr || src->as_str() == nullptr) {
+                return std::unexpected(
+                    kernel::KernelError{"component.propose: `source` must be a string"});
+            }
+            const std::string& source = *src->as_str();
+            Value out = Value::object();
+            auto comp = schema::load_component_jsonc(source);
+            if (!comp.has_value()) {
+                out.set("proposed", Value::boolean(false));
+                out.set("errors", Value::list({Value::str(comp.error().message)}));
+                return out; // invalid candidate is a result the model can fix, not an error
+            }
+            auto trace = kernel::check_component_authority(*comp, registry_);
+            if (!trace.has_value()) {
+                out.set("proposed", Value::boolean(false));
+                out.set("errors", Value::list({Value::str(trace.error().message)}));
+                return out;
+            }
+            if (!stage_proposal(base, comp->name, source)) {
+                return std::unexpected(
+                    kernel::KernelError{"component.propose: could not stage the proposal"});
+            }
+            const std::string risk = kernel::risk_tier(trace->reached);
+            const bool replaces = opts_.components.contains(comp->name);
+            events_.push(ComponentProposed{comp->name, comp->kind, comp->caps, risk,
+                                           staged_proposal_path(base, comp->name).string(),
+                                           replaces});
+            out.set("proposed", Value::boolean(true));
+            out.set("name", Value::str(comp->name));
+            out.set("kind", Value::str(comp->kind));
+            out.set("risk", Value::str(risk));
+            out.set("replaces_existing", Value::boolean(replaces));
+            out.set("note", Value::str("staged for human review; not active until approved"));
+            return out;
         });
 
     registry_.add_effect(

@@ -10,6 +10,7 @@
 
 #include "embedded_components.hpp"
 #include "runtime/fs_read_args.hpp"
+#include "runtime/proposals.hpp"
 #include "runtime/runtime.hpp"
 #include "runtime/task_args.hpp"
 #include "sandbox/sandbox.hpp"
@@ -525,6 +526,87 @@ TEST_CASE("fs.write tool: the model cannot write the control plane (.astrite)") 
     REQUIRE((*rt)->submit_user_message("write a component"));
     CHECK(tool_result(file).find(".astrite") != std::string::npos); // rejected, reason surfaced
     CHECK_FALSE(fs::exists(ws / ".astrite" / "components" / "evil.json"));
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
+TEST_CASE("component.propose: a valid candidate is staged and announced, not installed") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_propose_e2e";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+
+    // The model drafts a zero-cap echo-like tool and proposes it.
+    const std::string candidate =
+        R"({\"component\":\"greet\",\"kind\":\"tool\",\"caps\":[],)"
+        R"(\"tree\":{\"do\":\"obj.build\",\"with\":{\"hi\":{\"ref\":\"input.name\"}},\"as\":\"o\"},)"
+        R"(\"output\":{\"ref\":\"o\"}})";
+    ScriptedChat chat;
+    chat.script.push_back(
+        {"", {{"c1", "component_propose", R"({"source":")" + candidate + R"("})"}}, "tool_calls",
+         {}});
+    chat.script.push_back({"proposed it", {}, "stop", {}});
+
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    auto cp = load_component_jsonc(components::COMPONENT_PROPOSE_JSONC);
+    REQUIRE(cp.has_value());
+    opts.components.emplace("component_propose", std::move(*cp));
+
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("propose a greet tool"));
+
+    // A ComponentProposed event was emitted naming the candidate.
+    auto events = drain(**rt);
+    CHECK(count_of<runtime::ComponentProposed>(events) == 1);
+    bool found = false;
+    for (const auto& e : events) {
+        if (const auto* p = std::get_if<runtime::ComponentProposed>(&e)) {
+            CHECK(p->name == "greet");
+            CHECK(p->risk == "none");
+            CHECK_FALSE(p->replaces_existing);
+            found = true;
+        }
+    }
+    CHECK(found);
+
+    // It was staged for review — NOT installed into the live components dir.
+    auto staged = runtime::read_staged_proposal(ws, "greet");
+    REQUIRE(staged.has_value());
+    CHECK(staged->find("greet") != std::string::npos);
+    CHECK_FALSE(fs::exists(ws / ".astrite" / "components" / "greet.json"));
+
+    // The tool result tells the model it is staged, pending review.
+    CHECK(tool_result(file).find("staged") != std::string::npos);
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
+TEST_CASE("component.propose: an invalid candidate reports errors, stages nothing") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_propose_bad";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+
+    ScriptedChat chat;
+    chat.script.push_back(
+        {"", {{"c1", "component_propose", R"({"source":"{ not a component"})"}}, "tool_calls", {}});
+    chat.script.push_back({"nope", {}, "stop", {}});
+
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    auto cp = load_component_jsonc(components::COMPONENT_PROPOSE_JSONC);
+    REQUIRE(cp.has_value());
+    opts.components.emplace("component_propose", std::move(*cp));
+
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("propose garbage"));
+
+    auto events = drain(**rt);
+    CHECK(count_of<runtime::ComponentProposed>(events) == 0); // nothing announced
+    CHECK(runtime::list_staged_proposals(ws).empty());        // nothing staged
     fs::remove_all(ws);
     fs::remove(file);
 }
