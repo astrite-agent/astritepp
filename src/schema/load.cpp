@@ -71,7 +71,8 @@ struct Component {
     std::optional<std::vector<std::string>> caps;
     std::optional<std::string> description;
     std::optional<Value> parameters;
-    Node tree;
+    std::optional<Node> tree;  // required for every kind except `task`
+    std::optional<Value> task; // present (and desugared) only for kind `task`
     std::optional<ArgValue> output;
 };
 
@@ -123,8 +124,8 @@ struct glz::meta<astrite::schema::wire::Component> {
     using T = astrite::schema::wire::Component;
     static constexpr auto value =
         object("component", &T::name, "kind", &T::kind, "caps", &T::caps, "description",
-               &T::description, "parameters", &T::parameters, "tree", &T::tree, "output",
-               &T::output);
+               &T::description, "parameters", &T::parameters, "tree", &T::tree, "task", &T::task,
+               "output", &T::output);
 };
 
 // Custom reader: Value is generic data — delegate to glaze's generic reader (i64
@@ -290,7 +291,52 @@ std::expected<Component, LoadError> load_component_jsonc(std::string_view jsonc)
     c.description = std::move(w.description);
     c.parameters = std::move(w.parameters);
     c.output = std::move(w.output);
-    auto tree = to_ir(w.tree);
+
+    if (c.kind == "task") {
+        // A task component carries an inert `task` block instead of a tree. We
+        // desugar it to the canonical {do: "task.run", with: {spec: <task>}, as:
+        // "out"} action so it walks like every other component — the model selects
+        // the verb (which tool to call); the argv is pinned literal data it cannot
+        // touch. Structural validation here fails fast; the runtime confines paths.
+        if (w.tree.has_value()) {
+            return std::unexpected(LoadError{"a task component must not declare a `tree`"});
+        }
+        if (!w.task.has_value()) {
+            return std::unexpected(LoadError{"a task component requires a `task` block"});
+        }
+        const Value& task = *w.task;
+        if (!task.is_object()) {
+            return std::unexpected(LoadError{"`task` must be an object"});
+        }
+        const Value* argv = task.get("argv");
+        if (argv == nullptr || argv->as_list() == nullptr || argv->as_list()->empty()) {
+            return std::unexpected(LoadError{"task `argv` must be a non-empty list"});
+        }
+        for (const Value& a : *argv->as_list()) {
+            if (a.as_str() == nullptr) {
+                return std::unexpected(
+                    LoadError{"task `argv` elements must be strings (no holes in the MVP)"});
+            }
+        }
+        if (const Value* net = task.get("net");
+            net != nullptr && net->as_bool() != nullptr && *net->as_bool()) {
+            return std::unexpected(LoadError{"task `net` access is not yet supported"});
+        }
+
+        ArgMap with;
+        with.emplace("spec", ArgValue{*w.task}); // the whole block, pinned as a literal
+        c.tree = Node{Action{"task.run", std::move(with), std::optional<std::string>("out")}};
+        c.output = ArgValue{Ref{"out"}};
+        return c;
+    }
+
+    if (w.task.has_value()) {
+        return std::unexpected(LoadError{"only a `task` component may declare a `task` block"});
+    }
+    if (!w.tree.has_value()) {
+        return std::unexpected(LoadError{"a component requires a `tree`"});
+    }
+    auto tree = to_ir(*w.tree);
     if (!tree) {
         return std::unexpected(tree.error());
     }

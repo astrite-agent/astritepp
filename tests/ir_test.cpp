@@ -284,6 +284,81 @@ TEST_CASE("foreach and repeat shapes are strict") {
                     .empty());
 }
 
+TEST_CASE("a task component desugars to a pinned task.run action") {
+    Component c = must_load(R"({
+  "component": "build",
+  "kind": "task",
+  "caps": ["task.run"],
+  "description": "Build the project.",
+  "task": {
+    "argv": ["cmake", "--build", "build"],
+    "cwd": "workspace",
+    "effect": "check",
+    "net": false,
+    "writable": ["build"],
+    "timeout_ms": 600000,
+    "output_cap_bytes": 262144
+  }
+})");
+    CHECK(c.kind == "task");
+    REQUIRE(c.caps == std::vector<std::string>{"task.run"});
+
+    // Desugared tree: a single {do: "task.run", with: {spec: <task block>}, as: "out"}.
+    const Action* act = node_as<Action>(c.tree);
+    REQUIRE(act != nullptr);
+    CHECK(act->primitive == "task.run");
+    REQUIRE(act->bind.has_value());
+    CHECK(*act->bind == "out");
+
+    const ArgValue* spec = find_arg(act->with, "spec");
+    REQUIRE(spec != nullptr);
+    const Value* spec_v = std::get_if<Value>(&spec->v); // the pinned spec is a literal
+    REQUIRE(spec_v != nullptr);
+    REQUIRE(spec_v->is_object());
+    const Value* argv = spec_v->get("argv");
+    REQUIRE(argv != nullptr);
+    REQUIRE(argv->as_list() != nullptr);
+    CHECK(argv->as_list()->size() == 3);
+    CHECK((*argv->as_list())[0] == Value::str("cmake"));
+
+    // Output is wired to the bound result.
+    REQUIRE(c.output.has_value());
+    const Ref* out_ref = std::get_if<Ref>(&c.output->v);
+    REQUIRE(out_ref != nullptr);
+    CHECK(out_ref->path == "out");
+}
+
+TEST_CASE("a task component rejects a tree, and a non-task still requires one") {
+    CHECK(must_fail(R"({
+  "component": "build", "kind": "task", "caps": ["task.run"],
+  "task": {"argv": ["true"]},
+  "tree": {"do": "x"}
+})")
+              .find("tree") != std::string::npos);
+
+    // A task component with no task block is rejected.
+    CHECK(must_fail(R"({"component": "build", "kind": "task", "caps": ["task.run"]})")
+              .find("task") != std::string::npos);
+}
+
+TEST_CASE("a task block is structurally validated at load") {
+    // argv must be a non-empty list of strings (no holes in the MVP).
+    CHECK_FALSE(must_fail(R"({
+  "component": "t", "kind": "task", "caps": ["task.run"], "task": {"argv": []}
+})")
+                    .empty());
+    CHECK_FALSE(must_fail(R"({
+  "component": "t", "kind": "task", "caps": ["task.run"], "task": {"argv": ["cmake", 7]}
+})")
+                    .empty());
+    // net is deferred and rejected at load.
+    CHECK(must_fail(R"({
+  "component": "t", "kind": "task", "caps": ["task.run"],
+  "task": {"argv": ["true"], "net": true}
+})")
+              .find("net") != std::string::npos);
+}
+
 TEST_CASE("malformed JSONC returns an error, never crashes") {
     CHECK_FALSE(must_fail("{nope").empty());
     CHECK_FALSE(must_fail("{]").empty());
