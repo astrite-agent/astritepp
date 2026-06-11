@@ -33,6 +33,7 @@
 #include "frontends/tui/commands.hpp"
 #include "frontends/tui/history.hpp"
 #include "frontends/tui/markdown_render.hpp"
+#include "frontends/tui/segment_render.hpp"
 #include "frontends/tui/transcript.hpp"
 #include "frontends/tui/view_state.hpp"
 #include "frontends/tui/widgets.hpp"
@@ -46,96 +47,10 @@ namespace at = astrite::tui; // FTXUI also defines `Focus`/`Modal`; keep ours qu
 using astrite::tui::Segment;
 using astrite::tui::ViewState;
 
-std::string first_line(const std::string& s) {
-    std::size_t nl = s.find('\n');
-    return nl == std::string::npos ? s : s.substr(0, nl);
-}
-
-std::string clip_lines(const std::string& s, std::size_t max_lines) {
-    std::size_t lines = 0, pos = 0;
-    while (pos != std::string::npos && lines < max_lines) {
-        pos = s.find('\n', pos);
-        if (pos != std::string::npos) {
-            ++pos;
-            ++lines;
-        }
-    }
-    if (pos == std::string::npos) {
-        return s;
-    }
-    std::size_t remaining = 0;
-    for (std::size_t p = pos; p < s.size(); ++p) {
-        if (s[p] == '\n') {
-            ++remaining;
-        }
-    }
-    return s.substr(0, pos) + "… (+" + std::to_string(remaining + 1) + " more lines)";
-}
-
-Element segment_body(const Segment& s, bool collapsed, bool markdown) {
-    switch (s.kind) {
-    case Segment::Kind::user:
-        return hbox({text("› ") | bold, paragraph(s.text)}) | color(Color::CyanLight);
-    case Segment::Kind::assistant:
-        if (collapsed) {
-            return paragraph(first_line(s.text) + " …") | color(Color::GrayLight);
-        }
-        // Settled messages render as styled markdown (when enabled); the streaming
-        // partial stays raw (no half-parsed flicker) with a cursor.
-        if (!s.done) {
-            return paragraph(s.text + " ▌");
-        }
-        return markdown ? astrite::tui::render_markdown(s.text) : paragraph(s.text);
-    case Segment::Kind::tool: {
-        std::string head = std::string(collapsed ? "▸ " : "▾ ") + "⚙ " + s.tool_name;
-        if (!s.tool_args.empty() && s.tool_args != "{}") {
-            head += " " + first_line(s.tool_args);
-        }
-        if (collapsed) {
-            return text(head) | color(Color::YellowLight);
-        }
-        Elements rows{text(head) | color(Color::YellowLight)};
-        rows.push_back(s.done ? paragraph(clip_lines(s.tool_result, 14)) | color(Color::GrayLight)
-                              : text("running…") | dim);
-        return vbox(std::move(rows)) | borderLight | color(Color::GrayDark);
-    }
-    case Segment::Kind::error:
-        return hbox({text("✗ ") | bold, paragraph(s.text)}) | color(Color::RedLight) | borderLight;
-    case Segment::Kind::proposal: {
-        // Kernel chrome — deliberately a distinct visual language from model
-        // content (double border, magenta) so a proposal can never be mistaken
-        // for, or forged by, model output.
-        Elements rows;
-        rows.push_back(hbox({text("⛨ component proposal: ") | bold, text(s.tool_name) | bold}));
-        std::string meta = "risk " + s.risk;
-        if (!s.caps.empty()) {
-            meta += " · caps ";
-            for (std::size_t i = 0; i < s.caps.size(); ++i) {
-                meta += (i != 0 ? ", " : "") + s.caps[i];
-            }
-        }
-        rows.push_back(text(meta));
-        rows.push_back(text("pending review — approve with /approve " + s.tool_name) | dim);
-        return vbox(std::move(rows)) | borderDouble | color(Color::Magenta);
-    }
-    case Segment::Kind::notice:
-        return hbox({text("⛨ ") | bold, paragraph(s.text)}) | color(Color::Magenta);
-    }
-    return text("");
-}
-
-Element render_segment(const Segment& s, int idx, bool selected, bool collapsed, bool show_index,
-                       bool markdown) {
-    Element body = segment_body(s, collapsed, markdown);
-    Element accent = selected ? (text("┃ ") | color(Color::Cyan)) : text("  ");
-    Element row = hbox({accent, body | flex});
-    if (show_index) {
-        std::string label = (idx < 10 ? " " : "") + std::to_string(idx);
-        Element gutter = text(label + " ") | (selected ? color(Color::Cyan) : dim);
-        row = hbox({gutter, row | flex});
-    }
-    return row;
-}
+using astrite::tui::clip_lines;
+using astrite::tui::first_line;
+using astrite::tui::render_segment;
+using astrite::tui::segment_body;
 
 // The /config panel element, framing the (interactive) checkbox `fields` with
 // read-only runtime info. Returned without center/clear_under — the FTXUI Modal
