@@ -88,6 +88,8 @@ public:
     [[nodiscard]] const std::vector<Segment>& segments() const { return segments_; }
     [[nodiscard]] bool turn_active() const { return turn_active_; }
 
+    void clear() { segments_.clear(); }
+
 private:
     Segment* open_assistant_or_null() {
         if (!segments_.empty() && segments_.back().kind == Segment::Kind::assistant &&

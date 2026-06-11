@@ -246,6 +246,15 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       runtime `submit_user_message(text, stop_token)` cancellation that aborts the curl stream.
       Durable across the UiTree migration (only per-segment drawing gets replaced). The deeper
       M8 (UiTree value type, `ui.*` vocabulary, `view` components, chrome invariant) is below.
+- [x] **TUI interaction polish, 2026-06-10**: a local slash-command registry (`commands.hpp`,
+      pure + unit-tested) with a live **completion popup** (Tab fills the highlighted command);
+      scrollable **modal overlays** for `/help` · `/commands` · `/status` (dbox + centered panel,
+      Esc closes); a pure **view-state model** (`view_state.hpp`, unit-tested) for focus /
+      selection / collapse / modal; **Tab** completes a slash token or switches focus to the
+      transcript; transcript focus gives **indexed per-segment selection** (↑/↓, Home/End) with
+      **collapse/expand** (Enter/Space, plus `/collapse`·`/expand` bulk) — tool cards and
+      assistant text fold to a one-line summary; `/clear`, `/top`, `/bottom`, `/focus`. Pure
+      cores green (11 cases); live-verified under a pty (popup → Tab → modal → Esc → turn).
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,
