@@ -241,7 +241,13 @@ argv holes are the remaining M7 work; see the deferred items below.*
       rejected at load, pinned `--` honored.
 - [x] fs tool components embedded + authority-checked: `fs_read.json`, `fs_list.json`,
       `search_find.json`, `fs_write.json`, `fs_edit.json`. Repo-local `build`/`test` task verbs
-      ship under `.astrite/components/`. (`workspace_context` orientation tool still pending.)
+      ship under `.astrite/components/`.
+- [x] **`diff.workspace`** (review §3): net unified diff of the agent's own session edits from a
+      kernel write-journal — no git, includes new files, bounded. `diff_workspace` tool embedded.
+      (LCS unified-diff in `util/unified_diff.hpp`.)
+- [x] **`workspace.context`** (review §4): deterministic orientation (root, entries, project
+      markers, live verbs). `workspace_context` tool embedded. *The composition-macro form (build
+      it from primitives as a component) awaits string/collection predicate primitives.*
 - [x] End-to-end confinement check (live, 2026-06-10): model listed `components/`, read
       `echo.json`, and an attempted `/etc/hostname` read was rejected by the belt
       (`absolute path is an escape`); the suspenders (Landlock denying `..` past the base even

@@ -163,6 +163,13 @@ inline std::string system_prompt() {
            "Execution: you may select declared task verbs (e.g. build, test) to run checks; you "
            "cannot compose shell commands — there is no shell, and a task's command is fixed. "
            "After changing code, run the relevant task to verify rather than assuming.\n"
+           "Orientation: call workspace_context once at the start to learn the project type and "
+           "available verbs. Use diff_workspace to review and explain the changes you've made.\n"
+           "Authoring your own components: draft inert component data, validate it with "
+           "component_check, then submit it with component_propose — it is staged for the human to "
+           "approve and is NOT active until then; you cannot write the .astrite control plane "
+           "yourself. Declare the minimal caps a component truly needs, and give tool components a "
+           "`parameters` JSON Schema so the model (you) knows what inputs to pass.\n"
            "Use the available tools when they help, and answer concisely.";
 }
 
