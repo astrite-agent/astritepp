@@ -12,6 +12,7 @@
 #include <mutex>
 #include <stop_token>
 #include <string>
+#include <vector>
 
 #include "kernel/primitive.hpp"
 #include "llm/sse.hpp"
@@ -46,6 +47,30 @@ public:
     bool submit_user_message(const std::string& text, std::stop_token cancel = {});
 
     [[nodiscard]] EventChannel& events() { return events_; }
+
+    // ---- consent: the human side of self-modification (B4). These are the ONLY
+    // way a model-authored component becomes active. The model stages a proposal
+    // (component.propose); a human reviews and accepts it here, which is what
+    // writes the component file + a hash-pinned trust record and installs it.
+
+    struct ProposalSummary {
+        std::string name;
+        std::string kind;
+        std::string risk;
+        std::vector<std::string> caps;
+    };
+
+    // Names of components staged under .astrite/proposals/, awaiting review.
+    [[nodiscard]] std::vector<std::string> pending_proposals() const;
+
+    // Approve a staged proposal: re-validate against the live registry, write
+    // .astrite/components/<name>.json + a trust record, install it live, and clear
+    // the staging file. Fails (installing nothing) on an unknown or invalid one.
+    [[nodiscard]] std::expected<ProposalSummary, std::string>
+    accept_proposal(const std::string& name);
+
+    // Discard a staged proposal without installing it.
+    bool reject_proposal(const std::string& name);
 
 private:
     explicit Runtime(Options opts);

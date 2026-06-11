@@ -57,6 +57,39 @@ int main(int argc, char** argv) {
             break;
         }
 
+        // Consent surface: reviewing and approving model-authored components is a
+        // human action, handled here (kernel chrome), never by the turn loop.
+        if (line == "/proposals") {
+            auto names = runtime.pending_proposals();
+            if (names.empty()) {
+                std::puts("no proposals pending review");
+            } else {
+                std::puts("staged proposals (use /approve <name> or /reject <name>):");
+                for (const std::string& n : names) {
+                    std::printf("  • %s\n", n.c_str());
+                }
+            }
+            continue;
+        }
+        if (line.starts_with("/approve ") || line.starts_with("/reject ")) {
+            const bool approve = line.starts_with("/approve ");
+            const std::string name = line.substr(approve ? 9 : 8);
+            if (approve) {
+                auto r = runtime.accept_proposal(name);
+                if (r.has_value()) {
+                    std::printf("approved `%s` (%s, %s risk) — installed and pinned\n",
+                                r->name.c_str(), r->kind.c_str(), r->risk.c_str());
+                } else {
+                    std::printf("could not approve `%s`: %s\n", name.c_str(), r.error().c_str());
+                }
+            } else {
+                std::printf(runtime.reject_proposal(name) ? "rejected `%s`\n"
+                                                          : "no staged proposal `%s`\n",
+                            name.c_str());
+            }
+            continue;
+        }
+
         std::jthread turn([&runtime, line] { runtime.submit_user_message(line); });
 
         bool mid_stream = false;

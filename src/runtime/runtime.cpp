@@ -1,5 +1,7 @@
 #include "runtime/runtime.hpp"
 
+#include <ctime>
+#include <fstream>
 #include <utility>
 
 #include "kernel/authority.hpp"
@@ -11,6 +13,7 @@
 #include "runtime/fs_read_args.hpp"
 #include "runtime/proposals.hpp"
 #include "runtime/task_args.hpp"
+#include "runtime/trust_store.hpp"
 #include "sandbox/sandbox.hpp"
 #include "schema/load.hpp"
 #include "util/control_plane.hpp"
@@ -379,6 +382,74 @@ Value Runtime::tool_definitions() const {
         defs.push_back(std::move(def));
     }
     return Value::list(std::move(defs));
+}
+
+namespace {
+std::string iso8601_now() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    ::gmtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
+} // namespace
+
+std::vector<std::string> Runtime::pending_proposals() const {
+    return list_staged_proposals(opts_.workspace_root);
+}
+
+std::expected<Runtime::ProposalSummary, std::string>
+Runtime::accept_proposal(const std::string& name) {
+    std::lock_guard turn_lock(turn_mu_); // mutates components/tool_defs; never mid-turn
+
+    auto source = read_staged_proposal(opts_.workspace_root, name);
+    if (!source.has_value()) {
+        return std::unexpected("no staged proposal named `" + name + "`");
+    }
+    auto comp = schema::load_component_jsonc(*source);
+    if (!comp.has_value()) {
+        return std::unexpected("staged proposal is invalid: " + comp.error().message);
+    }
+    if (comp->name != name) {
+        return std::unexpected("staged proposal declares a different name `" + comp->name + "`");
+    }
+    auto trace = kernel::check_component_authority(*comp, registry_);
+    if (!trace.has_value()) {
+        return std::unexpected("authority check failed: " + trace.error().message);
+    }
+    const std::string risk = kernel::risk_tier(trace->reached);
+
+    // Kernel-owned writes — the trusted side may write the control plane the model
+    // cannot. Install the component, then pin a trust record of the exact source.
+    const std::filesystem::path comp_dir = opts_.workspace_root / ".astrite" / "components";
+    std::error_code ec;
+    std::filesystem::create_directories(comp_dir, ec);
+    {
+        std::ofstream out(comp_dir / (name + ".json"), std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return std::unexpected("could not write the component file");
+        }
+        out << *source;
+        if (!out.good()) {
+            return std::unexpected("could not write the component file");
+        }
+    }
+    TrustRecord record =
+        make_trust_record(name, *source, comp->caps, risk, iso8601_now());
+    if (!write_trust_record(opts_.workspace_root / ".astrite" / "trust", record)) {
+        return std::unexpected("could not write the trust record");
+    }
+
+    ProposalSummary summary{comp->name, comp->kind, risk, comp->caps};
+    opts_.components.insert_or_assign(name, std::move(*comp)); // install live
+    tool_defs_ = tool_definitions();
+    (void)discard_proposal(opts_.workspace_root, name); // best-effort cleanup
+    return summary;
+}
+
+bool Runtime::reject_proposal(const std::string& name) {
+    return discard_proposal(opts_.workspace_root, name);
 }
 
 bool Runtime::submit_user_message(const std::string& text, std::stop_token cancel) {

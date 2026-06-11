@@ -13,7 +13,9 @@
 #include "runtime/proposals.hpp"
 #include "runtime/runtime.hpp"
 #include "runtime/task_args.hpp"
+#include "runtime/trust_store.hpp"
 #include "sandbox/sandbox.hpp"
+#include "util/sha256.hpp"
 #include "runtime/session.hpp"
 #include "schema/load.hpp"
 #include "schema/value_json.hpp"
@@ -607,6 +609,107 @@ TEST_CASE("component.propose: an invalid candidate reports errors, stages nothin
     auto events = drain(**rt);
     CHECK(count_of<runtime::ComponentProposed>(events) == 0); // nothing announced
     CHECK(runtime::list_staged_proposals(ws).empty());        // nothing staged
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
+namespace {
+constexpr std::string_view GREET_SRC = R"({
+  "component": "greet", "kind": "tool", "caps": [],
+  "description": "Greet by name.",
+  "tree": {"do": "obj.build", "with": {"hi": {"ref": "input.name"}}, "as": "o"},
+  "output": {"ref": "o"}
+})";
+} // namespace
+
+TEST_CASE("accept_proposal installs a staged component and pins a trust record") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_accept";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+    REQUIRE(runtime::stage_proposal(ws, "greet", std::string(GREET_SRC)));
+
+    ScriptedChat chat;
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+
+    CHECK((*rt)->pending_proposals() == std::vector<std::string>{"greet"});
+
+    auto summary = (*rt)->accept_proposal("greet");
+    REQUIRE(summary.has_value());
+    CHECK(summary->name == "greet");
+    CHECK(summary->kind == "tool");
+    CHECK(summary->risk == "none");
+
+    // The kernel wrote the component file and a hash-pinned trust record.
+    CHECK(fs::exists(ws / ".astrite" / "components" / "greet.json"));
+    auto rec = runtime::read_trust_record(ws / ".astrite" / "trust", "greet");
+    REQUIRE(rec.has_value());
+    CHECK(rec->sha256 == astrite::util::sha256_hex(std::string(GREET_SRC)));
+    CHECK(runtime::evaluate_trust(std::string(GREET_SRC), rec) == runtime::TrustState::trusted);
+
+    // Staging is cleared; nothing left pending.
+    CHECK((*rt)->pending_proposals().empty());
+    CHECK_FALSE(runtime::read_staged_proposal(ws, "greet").has_value());
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
+TEST_CASE("accept_proposal installs live: the accepted tool is immediately callable") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_accept_live";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+    REQUIRE(runtime::stage_proposal(ws, "greet", std::string(GREET_SRC)));
+
+    ScriptedChat chat;
+    chat.script.push_back({"", {{"c1", "greet", R"({"name":"bob"})"}}, "tool_calls", {}});
+    chat.script.push_back({"done", {}, "stop", {}});
+
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->accept_proposal("greet").has_value());
+
+    REQUIRE((*rt)->submit_user_message("greet bob"));
+    // The just-accepted component handled the call.
+    runtime::Session session(file);
+    bool saw = false;
+    for (const Value& m : *session.read()->get("messages")->as_list()) {
+        const Value* role = m.get("role");
+        if (role != nullptr && *role == Value::str("tool")) {
+            CHECK(m.get("content")->as_str()->find("bob") != std::string::npos);
+            saw = true;
+        }
+    }
+    CHECK(saw);
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
+TEST_CASE("accept_proposal rejects an unknown or invalid proposal, installing nothing") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_accept_bad";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+    REQUIRE(runtime::stage_proposal(ws, "broken", "{ not a component"));
+
+    ScriptedChat chat;
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+
+    CHECK_FALSE((*rt)->accept_proposal("does_not_exist").has_value());
+    CHECK_FALSE((*rt)->accept_proposal("broken").has_value()); // staged but invalid
+    CHECK_FALSE(fs::exists(ws / ".astrite" / "components" / "broken.json"));
+
+    // reject discards the staged file.
+    CHECK((*rt)->reject_proposal("broken"));
+    CHECK((*rt)->pending_proposals().empty());
     fs::remove_all(ws);
     fs::remove(file);
 }
