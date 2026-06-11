@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 
+#include "llm/anthropic.hpp"
 #include "llm/openai_compat.hpp"
 
 namespace astrite::llm {
@@ -29,7 +30,14 @@ std::expected<std::shared_ptr<Provider>, std::string> make_provider_from_env() {
         }
         return std::make_shared<OpenAiCompatProvider>(std::move(*cfg));
     }
-    // `gpt` (OpenAI-native) and `anthropic` are wired in as those providers land.
+    if (kind == "anthropic" || kind == "claude") {
+        auto cfg = AnthropicConfig::from_env();
+        if (!cfg.has_value()) {
+            return std::unexpected(cfg.error());
+        }
+        return std::make_shared<AnthropicProvider>(std::move(*cfg));
+    }
+    // `gpt` (OpenAI-native Responses API) is wired in when that provider lands.
     return std::unexpected("provider `" + kind + "` is not available yet");
 }
 
