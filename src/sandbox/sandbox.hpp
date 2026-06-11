@@ -60,6 +60,36 @@ struct OpResult {
                                const std::string& old_text, const std::string& new_text,
                                std::size_t expected);
 
+// ---- task execution (M7): the only path that runs a *declared external* program.
+// Unlike the fs helpers (which self-re-exec /proc/self/exe), run_task forks and
+// execs a program named by a pinned argv template. The model never reaches this:
+// it selects a task verb; the kernel owns the argv. Confinement is the same floor
+// (no_new_privs -> seccomp net-deny -> Landlock) with read+exec on the declared
+// read bases and write on the declared write bases. stdout/stderr are captured
+// separately and capped; a timeout kills the child's whole process group.
+
+struct TaskSpec {
+    std::vector<std::string> argv;                  // argv[0] = program (PATH-resolved if bare)
+    std::filesystem::path cwd;                      // working directory (absolute)
+    std::vector<std::filesystem::path> read_paths;  // read + execute bases
+    std::vector<std::filesystem::path> write_paths; // write bases (also readable)
+    int timeout_ms = 0;                             // 0 == no timeout
+    std::size_t output_cap = 256u * 1024;           // per-stream capture ceiling
+};
+
+struct TaskResult {
+    bool spawned = false;        // the child applied the ratchet and exec'd the program
+    int code = -1;               // exit code (>=0) or -signal if killed by a signal
+    bool timed_out = false;      // killed because it exceeded timeout_ms
+    bool out_truncated = false;  // stdout hit output_cap
+    bool err_truncated = false;  // stderr hit output_cap
+    std::string out;             // captured stdout (<= output_cap)
+    std::string err;             // captured stderr (<= output_cap)
+    std::string spawn_error;     // why the spawn failed, when !spawned
+};
+
+[[nodiscard]] TaskResult run_task(const TaskSpec& spec);
+
 // The hidden-subcommand entry point. Frontends (and the test binary) call this
 // first in main(): if argv is a `__sbx` invocation it runs the confined op and
 // returns the exit code; otherwise it returns -1 and main() proceeds normally.

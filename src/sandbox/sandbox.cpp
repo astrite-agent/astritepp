@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <ctime>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include <csignal>
 #include <dirent.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <linux/landlock.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
@@ -518,6 +520,33 @@ int op_find(const std::string& base, const std::string& rel, const std::string& 
     return 0;
 }
 
+// Resolve a task program to an absolute path in the PARENT (so the child only
+// execve's a known path — no PATH search post-fork, and a missing tool fails
+// cleanly before we ever fork). A name containing '/' is used verbatim.
+std::string resolve_program(const std::string& prog) {
+    if (prog.find('/') != std::string::npos) {
+        return ::access(prog.c_str(), X_OK) == 0 ? prog : std::string{};
+    }
+    const char* path = ::getenv("PATH");
+    std::string dirs = path != nullptr ? path : "/usr/bin:/bin";
+    std::size_t start = 0;
+    while (true) {
+        std::size_t colon = dirs.find(':', start);
+        std::string dir = dirs.substr(start, colon == std::string::npos ? colon : colon - start);
+        if (dir.empty()) {
+            dir = ".";
+        }
+        std::string cand = dir + "/" + prog;
+        if (::access(cand.c_str(), X_OK) == 0) {
+            return cand;
+        }
+        if (colon == std::string::npos) {
+            return std::string{};
+        }
+        start = colon + 1;
+    }
+}
+
 } // namespace
 
 bool install_inet_deny() {
@@ -700,6 +729,222 @@ OpResult fs_edit(const std::filesystem::path& base, const std::string& rel,
                  const std::string& old_text, const std::string& new_text, std::size_t expected) {
     return run_with_stdin("edit", base, rel, std::to_string(expected),
                           frame_edit_payload(old_text, new_text));
+}
+
+TaskResult run_task(const TaskSpec& spec) {
+    static const auto ignore_sigpipe = [] {
+        ::signal(SIGPIPE, SIG_IGN); // a killed child must never signal us
+        return 0;
+    }();
+    (void)ignore_sigpipe;
+
+    TaskResult res;
+    if (spec.argv.empty()) {
+        res.spawn_error = "task: empty argv";
+        return res;
+    }
+    std::string prog = resolve_program(spec.argv[0]);
+    if (prog.empty()) {
+        res.spawn_error = "task: program not found or not executable: " + spec.argv[0];
+        return res;
+    }
+
+    // Everything the child touches before execve is built HERE, in the parent —
+    // no heap allocation between fork and exec (safe from a threaded host).
+    std::vector<std::string> argv_storage = spec.argv;
+    argv_storage[0] = prog;
+    std::vector<char*> argv;
+    argv.reserve(argv_storage.size() + 1);
+    for (std::string& a : argv_storage) {
+        argv.push_back(a.data());
+    }
+    argv.push_back(nullptr);
+
+    // A curated environment: enough for a toolchain to find its sub-tools, no more.
+    std::vector<std::string> env_storage;
+    for (const char* key : {"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR"}) {
+        if (const char* v = ::getenv(key)) {
+            env_storage.push_back(std::string(key) + "=" + v);
+        }
+    }
+    env_storage.emplace_back("TERM=dumb");
+    std::vector<char*> envp;
+    envp.reserve(env_storage.size() + 1);
+    for (std::string& e : env_storage) {
+        envp.push_back(e.data());
+    }
+    envp.push_back(nullptr);
+
+    std::string cwd = spec.cwd.string();
+    Policy policy;
+    policy.read_paths = spec.read_paths;
+    policy.write_paths = spec.write_paths;
+
+    int out_fds[2];
+    int err_fds[2];
+    int sync_fds[2]; // child -> parent failure channel; write end closes on a clean exec
+    if (::pipe(out_fds) != 0) {
+        res.spawn_error = "task: pipe failed";
+        return res;
+    }
+    if (::pipe(err_fds) != 0) {
+        ::close(out_fds[0]);
+        ::close(out_fds[1]);
+        res.spawn_error = "task: pipe failed";
+        return res;
+    }
+    if (::pipe(sync_fds) != 0) {
+        ::close(out_fds[0]);
+        ::close(out_fds[1]);
+        ::close(err_fds[0]);
+        ::close(err_fds[1]);
+        res.spawn_error = "task: pipe failed";
+        return res;
+    }
+    ::fcntl(sync_fds[1], F_SETFD, FD_CLOEXEC); // EOF on the read end == exec succeeded
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        for (int fd : {out_fds[0], out_fds[1], err_fds[0], err_fds[1], sync_fds[0], sync_fds[1]}) {
+            ::close(fd);
+        }
+        res.spawn_error = "task: fork failed";
+        return res;
+    }
+    if (pid == 0) {
+        ::setpgid(0, 0); // own process group so the parent can kill the whole tree
+        int devnull = ::open("/dev/null", O_RDONLY | O_CLOEXEC); // before the ratchet
+        if (devnull >= 0) {
+            ::dup2(devnull, STDIN_FILENO);
+            ::close(devnull);
+        }
+        ::dup2(out_fds[1], STDOUT_FILENO);
+        ::dup2(err_fds[1], STDERR_FILENO);
+        for (int fd : {out_fds[0], out_fds[1], err_fds[0], err_fds[1], sync_fds[0]}) {
+            ::close(fd);
+        }
+        if (::chdir(cwd.c_str()) != 0) {
+            char c = 'C';
+            ::write(sync_fds[1], &c, 1);
+            ::_exit(126);
+        }
+        if (!apply(policy)) {
+            char c = 'R';
+            ::write(sync_fds[1], &c, 1);
+            ::_exit(126);
+        }
+        ::execve(prog.c_str(), argv.data(), envp.data());
+        char c = 'X';
+        ::write(sync_fds[1], &c, 1);
+        ::_exit(127);
+    }
+
+    ::setpgid(pid, pid); // race-safe with the child's own setpgid
+    ::close(out_fds[1]);
+    ::close(err_fds[1]);
+    ::close(sync_fds[1]);
+
+    struct timespec start{};
+    ::clock_gettime(CLOCK_MONOTONIC, &start);
+    auto elapsed_ms = [&start]() -> long {
+        struct timespec now{};
+        ::clock_gettime(CLOCK_MONOTONIC, &now);
+        return (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000;
+    };
+
+    char buf[65536];
+    auto pump = [&](int fd, std::string& dst, bool& trunc) -> bool {
+        ssize_t r = ::read(fd, buf, sizeof buf);
+        if (r <= 0) {
+            return false; // EOF or error: stream done
+        }
+        std::size_t got = static_cast<std::size_t>(r);
+        if (dst.size() < spec.output_cap) {
+            std::size_t room = spec.output_cap - dst.size();
+            dst.append(buf, std::min(room, got));
+            if (got > room) {
+                trunc = true;
+            }
+        } else {
+            trunc = true;
+        }
+        return true;
+    };
+
+    bool out_open = true;
+    bool err_open = true;
+    bool sync_open = true;
+    char marker = 0; // 0 == exec succeeded; 'C'/'R'/'X' == chdir/ratchet/exec failure
+    while (out_open || err_open || sync_open) {
+        pollfd pfd[3];
+        pfd[0] = {out_open ? out_fds[0] : -1, POLLIN, 0};
+        pfd[1] = {err_open ? err_fds[0] : -1, POLLIN, 0};
+        pfd[2] = {sync_open ? sync_fds[0] : -1, POLLIN, 0};
+
+        int timeout = -1;
+        if (spec.timeout_ms > 0 && !res.timed_out) {
+            long rem = static_cast<long>(spec.timeout_ms) - elapsed_ms();
+            timeout = rem > 0 ? static_cast<int>(rem) : 0;
+        }
+        int n = ::poll(pfd, static_cast<nfds_t>(3), timeout);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (n == 0 && spec.timeout_ms > 0 && !res.timed_out) {
+            ::kill(-pid, SIGKILL);
+            res.timed_out = true;
+            continue; // loop again (timeout now -1) to drain to EOF after the kill
+        }
+        if (out_open && (pfd[0].revents & (POLLIN | POLLHUP)) != 0) {
+            if (!pump(out_fds[0], res.out, res.out_truncated)) {
+                ::close(out_fds[0]);
+                out_open = false;
+            }
+        }
+        if (err_open && (pfd[1].revents & (POLLIN | POLLHUP)) != 0) {
+            if (!pump(err_fds[0], res.err, res.err_truncated)) {
+                ::close(err_fds[0]);
+                err_open = false;
+            }
+        }
+        if (sync_open && (pfd[2].revents & (POLLIN | POLLHUP)) != 0) {
+            char c = 0;
+            ssize_t r = ::read(sync_fds[0], &c, 1);
+            if (r == 1) {
+                marker = c;
+            } else { // EOF: clean exec, or error
+                ::close(sync_fds[0]);
+                sync_open = false;
+            }
+        }
+    }
+    if (out_open) {
+        ::close(out_fds[0]);
+    }
+    if (err_open) {
+        ::close(err_fds[0]);
+    }
+    if (sync_open) {
+        ::close(sync_fds[0]);
+    }
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    res.spawned = (marker == 0);
+    if (!res.spawned) {
+        res.spawn_error = marker == 'C'   ? "task: cannot enter working directory"
+                          : marker == 'R' ? "task: sandbox apply failed"
+                                          : "task: exec failed";
+    }
+    if (WIFEXITED(status)) {
+        res.code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        res.code = -WTERMSIG(status);
+    }
+    return res;
 }
 
 int maybe_run_helper(int argc, char** argv) {
