@@ -312,6 +312,7 @@ int main(int argc, char** argv) {
     bool pref_markdown = true;
     bool pref_index = false;
     int cursor_pos = 0;               // shared with the Input widget (readline editing)
+    bool paste_mode = false;          // inside a bracketed paste (newlines = literal, not submit)
     astrite::tui::History history;    // Up/Down recall + Ctrl-R search
     bool rsearch = false;             // reverse-i-search mode
     std::string rquery;               // the search query being typed
@@ -416,32 +417,25 @@ int main(int argc, char** argv) {
         }
     };
 
-    InputOption input_opt;
-    // No placeholder: an empty placeholder would occupy the cursor cell and hide
-    // the cursor on an empty input. Hints live in the footer instead.
-    input_opt.multiline = false;
-    input_opt.cursor_position = &cursor_pos;
-    // No inverted/white-background field.
-    input_opt.transform = [](InputState state) { return state.element; };
-    input_opt.on_change = [&] { history.reset(); }; // typing exits history navigation
-    input_opt.on_enter = [&] {
+    // Submit the current input as one message (possibly multi-line). Called from
+    // the event handler on Enter — not via Input::on_enter, because a multiline
+    // Input would also insert a newline on Return.
+    auto do_submit = [&] {
         std::string text = input_text;
         if (text.empty()) {
             return;
         }
         history.push(text);
-        if (!text.empty() && text.front() == '/') {
+        input_text.clear();
+        cursor_pos = 0;
+        if (text.front() == '/') {
             run_command(text);
-            input_text.clear();
             return;
         }
         if (turn_active()) {
             return;
         }
-        {
-            transcript.user(text);
-        }
-        input_text.clear();
+        transcript.user(text);
         scroll = 1.0f;
         following = true;
         if (turn.has_value() && turn->joinable()) {
@@ -450,6 +444,21 @@ int main(int argc, char** argv) {
         turn.emplace(
             [&runtime, text](std::stop_token st) { runtime.submit_user_message(text, st); });
     };
+
+    InputOption input_opt;
+    // A single-space placeholder gives the cursor a cell on an empty input —
+    // FTXUI's empty-content render path otherwise draws no cursor. multiline lets
+    // pasted/typed newlines display; Enter is intercepted in the handler to submit.
+    input_opt.placeholder = " ";
+    input_opt.multiline = true;
+    input_opt.cursor_position = &cursor_pos;
+    input_opt.transform = [](InputState state) {
+        if (state.is_placeholder && state.focused) {
+            return state.element | focusCursorBarBlinking; // cursor on the empty field
+        }
+        return state.element;
+    };
+    input_opt.on_change = [&] { history.reset(); }; // typing exits history navigation
     Component input = Input(&input_text, input_opt);
 
     Component view = Renderer(input, [&] {
@@ -666,6 +675,29 @@ int main(int argc, char** argv) {
         }
 
         // Input focus.
+
+        // Bracketed paste: a pasted block is wrapped in ESC[200~ … ESC[201~, so we
+        // can tell pasted newlines (literal) from a typed Enter (submit). FTXUI
+        // delivers the markers as Special events.
+        if (e.input() == "\x1b[200~") {
+            paste_mode = true;
+            return true;
+        }
+        if (e.input() == "\x1b[201~") {
+            paste_mode = false;
+            return true;
+        }
+        if (paste_mode) {
+            if (e == Event::Return) {
+                input_text.insert(static_cast<size_t>(std::clamp(cursor_pos, 0,
+                                                                 static_cast<int>(input_text.size()))),
+                                  "\n");
+                ++cursor_pos;
+                return true;
+            }
+            return false; // pasted characters flow to the Input
+        }
+
         auto candidates = astrite::tui::complete(input_text);
         if (!candidates.empty()) {
             const bool sel_ok = popup_sel >= 0 && popup_sel < static_cast<int>(candidates.size());
@@ -765,6 +797,20 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Alt+Enter / Shift+Enter insert a newline (multi-line composition);
+        // a plain Enter submits. (Enter is intercepted here so the multiline Input
+        // doesn't also insert a newline.)
+        if (e.input() == "\x1b\r" || e.input() == "\x1b\n" || e.input() == "\x1b[13;2u") {
+            int at = std::clamp(cursor_pos, 0, static_cast<int>(input_text.size()));
+            input_text.insert(static_cast<size_t>(at), "\n");
+            cursor_pos = at + 1;
+            return true;
+        }
+        if (e == Event::Return) {
+            do_submit();
+            return true;
+        }
+
         if (e == Event::Escape) {
             if (turn.has_value() && turn_active()) {
                 turn->request_stop();
@@ -815,7 +861,14 @@ int main(int argc, char** argv) {
     });
     Component root = Modal(main_view, config_modal, &config_shown);
 
+    // Enable bracketed paste at the terminal. FTXUI doesn't manage mode 2004, so
+    // this survives its alt-screen/mouse setup; the ESC[200~ / ESC[201~ markers
+    // then arrive as Special events the handler brackets. Disable it on exit.
+    std::fputs("\x1b[?2004h", stdout);
+    std::fflush(stdout);
     screen.Loop(root);
+    std::fputs("\x1b[?2004l", stdout);
+    std::fflush(stdout);
     runtime.events().close();
     if (turn.has_value() && turn->joinable()) {
         turn->request_stop();
