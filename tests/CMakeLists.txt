@@ -13,11 +13,12 @@ add_executable(astrite_tests
     sandbox_test.cpp
     trust_test.cpp
     fs_helper_test.cpp
+    range_test.cpp
     tui_logic_test.cpp
     markdown_test.cpp
     tui_render_test.cpp
 )
 target_link_libraries(astrite_tests PRIVATE doctest astrite_core astrite_llm astrite_runtime
     astrite_sandbox ftxui::dom ftxui::screen)
-target_include_directories(astrite_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(astrite_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/generated)
 add_test(NAME astrite_tests COMMAND astrite_tests)

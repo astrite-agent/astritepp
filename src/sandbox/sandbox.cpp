@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -25,6 +26,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "sandbox/range.hpp"
 #include "sandbox/seccomp.hpp"
 
 namespace astrite::sandbox {
@@ -198,7 +200,27 @@ std::string join(const std::string& base, const std::string& rel) {
     return rel.empty() ? base : base + "/" + rel;
 }
 
-int op_read(const std::string& base, const std::string& rel) {
+// "offset:limit" -> (offset, limit). Empty / malformed fields keep the defaults
+// (offset 1, limit 0 == whole file), so a bad range degrades to a full read.
+void parse_read_range(const std::string& spec, long& offset, long& limit) {
+    auto to_long = [](std::string_view s, long def) -> long {
+        if (s.empty()) {
+            return def;
+        }
+        long v = def;
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
+        return ec == std::errc{} ? v : def;
+    };
+    std::size_t colon = spec.find(':');
+    if (colon == std::string::npos) {
+        offset = to_long(spec, offset);
+    } else {
+        offset = to_long(std::string_view(spec).substr(0, colon), offset);
+        limit = to_long(std::string_view(spec).substr(colon + 1), limit);
+    }
+}
+
+int op_read(const std::string& base, const std::string& rel, long offset, long limit) {
     std::string full = join(base, rel);
     int fd = ::open(full.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
@@ -218,7 +240,11 @@ int op_read(const std::string& base, const std::string& rel) {
         write_str(1, "fs.read: read error on `" + rel + "`");
         return 1;
     }
-    write_str(1, out);
+    if (offset > 1 || limit > 0) {
+        write_str(1, slice_lines(out, offset, limit)); // identity slice == whole file
+    } else {
+        write_str(1, out);
+    }
     return 0;
 }
 
@@ -701,7 +727,9 @@ int maybe_run_helper(int argc, char** argv) {
         return 126;
     }
     if (op == "read") {
-        return op_read(base, rel);
+        long offset = 1, limit = 0; // default: whole file
+        parse_read_range(extra, offset, limit);
+        return op_read(base, rel, offset, limit);
     }
     if (op == "list") {
         return op_list(base, rel);

@@ -1,15 +1,29 @@
 {
   // Read a workspace file. The fs.read effect confines the path internally
   // (belt: path.resolve) and runs in a Landlock-confined child (suspenders).
+  // Optional offset/limit select a 1-based line window so a large file can be
+  // read in slices without exceeding the content cap.
   "component": "fs_read",
   "kind": "tool",
   "caps": ["fs.read"],
-  "description": "Read a UTF-8 text file from the workspace.",
+  "description": "Read a UTF-8 text file from the workspace. Pass offset/limit to read a line range.",
   "parameters": {
     "type": "object",
-    "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}},
+    "properties": {
+      "path": {"type": "string", "description": "Workspace-relative file path."},
+      "offset": {"type": "integer", "description": "1-based first line to read. Omit to start at the beginning."},
+      "limit": {"type": "integer", "description": "Maximum number of lines to read. Omit to read to the end."}
+    },
     "required": ["path"]
   },
-  "tree": {"do": "fs.read", "with": {"path": {"ref": "input.path"}}, "as": "out"},
+  "tree": {
+    "do": "fs.read",
+    "with": {
+      "path": {"ref": "input.path"},
+      "offset": {"ref": "input.offset", "default": 0},
+      "limit": {"ref": "input.limit", "default": 0}
+    },
+    "as": "out"
+  },
   "output": {"ref": "out"}
 }

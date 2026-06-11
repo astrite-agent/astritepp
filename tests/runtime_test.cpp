@@ -1,9 +1,13 @@
 #include <doctest.h>
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "embedded_components.hpp"
+#include "runtime/fs_read_args.hpp"
 #include "runtime/runtime.hpp"
 #include "runtime/session.hpp"
 #include "schema/load.hpp"
@@ -12,6 +16,46 @@
 using namespace astrite;
 using namespace astrite::schema;
 namespace fs = std::filesystem;
+
+namespace {
+Value with_range(std::optional<std::int64_t> offset, std::optional<std::int64_t> limit) {
+    Value v = Value::object();
+    if (offset) {
+        v.set("offset", Value::integer(*offset));
+    }
+    if (limit) {
+        v.set("limit", Value::integer(*limit));
+    }
+    return v;
+}
+} // namespace
+
+TEST_CASE("fs.read range spec: absent / zero range means whole file (empty spec)") {
+    CHECK(*runtime::read_range_spec(Value::object()) == "");
+    CHECK(*runtime::read_range_spec(with_range(0, 0)) == "");
+    CHECK(*runtime::read_range_spec(with_range(std::nullopt, std::nullopt)) == "");
+}
+
+TEST_CASE("fs.read range spec: offset and/or limit format as offset:limit") {
+    CHECK(*runtime::read_range_spec(with_range(2, 3)) == "2:3");
+    CHECK(*runtime::read_range_spec(with_range(5, std::nullopt)) == "5:0"); // to end
+    CHECK(*runtime::read_range_spec(with_range(std::nullopt, 10)) == "1:10"); // from start
+}
+
+TEST_CASE("fs.read range spec: negatives clamp, not error") {
+    CHECK(*runtime::read_range_spec(with_range(-4, 2)) == "1:2");
+    CHECK(*runtime::read_range_spec(with_range(3, -1)) == "3:0");
+}
+
+TEST_CASE("fs.read range spec: a wrong-typed offset/limit is rejected") {
+    Value bad = Value::object();
+    bad.set("offset", Value::str("nope"));
+    CHECK_FALSE(runtime::read_range_spec(bad).has_value());
+
+    Value bad2 = Value::object();
+    bad2.set("limit", Value::real(2.5));
+    CHECK_FALSE(runtime::read_range_spec(bad2).has_value());
+}
 
 namespace {
 
@@ -222,6 +266,85 @@ TEST_CASE("a full turn: tool dispatch loops back through the session, then settl
     CHECK(count_of<runtime::TurnError>(events) == 0);
     CHECK(std::holds_alternative<runtime::TurnFinished>(events.back()));
     fs::remove(file);
+}
+
+namespace {
+// A workspace with one multi-line file, plus a Runtime that ships the real
+// embedded fs_read component so a scripted tool call exercises the whole chain:
+// args -> RefDefault -> fs.read effect -> read_range_spec -> confined helper ->
+// slice -> dispatch content.
+struct ReadFixture {
+    fs::path ws;
+    fs::path session;
+    explicit ReadFixture(std::string tag) {
+        ws = fs::temp_directory_path() / ("astrite_rt_read_" + tag);
+        fs::remove_all(ws);
+        fs::create_directories(ws);
+        std::ofstream(ws / "f.txt") << "one\ntwo\nthree\nfour\nfive";
+        session = temp_session();
+    }
+    ~ReadFixture() {
+        fs::remove_all(ws);
+        fs::remove(session);
+    }
+    runtime::Options options(runtime::ChatFn chat) {
+        runtime::Options opts = test_options(session, std::move(chat));
+        opts.workspace_root = ws;
+        auto fsr = load_component_jsonc(components::FS_READ_JSONC);
+        REQUIRE(fsr.has_value());
+        opts.components.emplace("fs_read", std::move(*fsr));
+        return opts;
+    }
+};
+
+std::string tool_result(const fs::path& session_file) {
+    runtime::Session session(session_file);
+    for (const Value& m : *session.read()->get("messages")->as_list()) {
+        const Value* role = m.get("role");
+        if (role != nullptr && *role == Value::str("tool")) {
+            return *m.get("content")->as_str();
+        }
+    }
+    return "<no tool message>";
+}
+} // namespace
+
+TEST_CASE("fs.read tool: an offset/limit line range flows end to end") {
+    ReadFixture fx("range");
+    ScriptedChat chat;
+    chat.script.push_back(
+        {"", {{"c1", "fs_read", R"({"path":"f.txt","offset":2,"limit":2})"}}, "tool_calls", {}});
+    chat.script.push_back({"done", {}, "stop", {}});
+
+    auto rt = runtime::Runtime::create(fx.options(chat.fn()));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("read lines 2-3"));
+    CHECK(tool_result(fx.session) == "two\nthree\n");
+}
+
+TEST_CASE("fs.read tool: omitting offset/limit reads the whole file (back-compat)") {
+    ReadFixture fx("full");
+    ScriptedChat chat;
+    chat.script.push_back({"", {{"c1", "fs_read", R"({"path":"f.txt"})"}}, "tool_calls", {}});
+    chat.script.push_back({"done", {}, "stop", {}});
+
+    auto rt = runtime::Runtime::create(fx.options(chat.fn()));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("read it all"));
+    CHECK(tool_result(fx.session) == "one\ntwo\nthree\nfour\nfive");
+}
+
+TEST_CASE("fs.read tool: a wrong-typed offset surfaces as recoverable tool content") {
+    ReadFixture fx("badarg");
+    ScriptedChat chat;
+    chat.script.push_back(
+        {"", {{"c1", "fs_read", R"({"path":"f.txt","offset":"nope"})"}}, "tool_calls", {}});
+    chat.script.push_back({"done", {}, "stop", {}});
+
+    auto rt = runtime::Runtime::create(fx.options(chat.fn()));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("bad offset"));
+    CHECK(tool_result(fx.session).find("`offset` must be an integer") != std::string::npos);
 }
 
 TEST_CASE("transcript continuity across submits; system prompt seeded exactly once") {

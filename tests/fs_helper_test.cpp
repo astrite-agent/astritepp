@@ -41,6 +41,33 @@ TEST_CASE("fs helper read: returns file content from inside the base") {
     fs::remove_all(ws);
 }
 
+TEST_CASE("fs helper read: a line range returns just that window, terminators kept") {
+    fs::path ws = make_ws("read_range");
+    write_file(ws / "f.txt", "one\ntwo\nthree\nfour\nfive");
+    auto r = run_fs_op("read", ws, "f.txt", "2:2");
+    CHECK(r.ok);
+    CHECK(r.output == "two\nthree\n");
+    fs::remove_all(ws);
+}
+
+TEST_CASE("fs helper read: an offset with no limit reads to the end") {
+    fs::path ws = make_ws("read_range_end");
+    write_file(ws / "f.txt", "a\nb\nc\nd");
+    auto r = run_fs_op("read", ws, "f.txt", "3:0");
+    CHECK(r.ok);
+    CHECK(r.output == "c\nd");
+    fs::remove_all(ws);
+}
+
+TEST_CASE("fs helper read: an empty range argument reads the whole file (back-compat)") {
+    fs::path ws = make_ws("read_range_full");
+    write_file(ws / "f.txt", "x\ny\nz");
+    auto r = run_fs_op("read", ws, "f.txt", "");
+    CHECK(r.ok);
+    CHECK(r.output == "x\ny\nz");
+    fs::remove_all(ws);
+}
+
 TEST_CASE("fs helper read: a missing file fails without crashing") {
     fs::path ws = make_ws("read_missing");
     auto r = run_fs_op("read", ws, "nope.txt");

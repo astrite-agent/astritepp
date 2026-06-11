@@ -8,6 +8,7 @@
 #include "kernel/prims.hpp"
 #include "kernel/trust.hpp"
 #include "llm/client.hpp"
+#include "runtime/fs_read_args.hpp"
 #include "sandbox/sandbox.hpp"
 
 namespace astrite::runtime {
@@ -117,7 +118,11 @@ void Runtime::register_effects() {
             if (!rel.has_value()) {
                 return std::unexpected(rel.error());
             }
-            sandbox::OpResult r = sandbox::run_fs_op("read", base, *rel);
+            auto range = read_range_spec(args);
+            if (!range.has_value()) {
+                return std::unexpected(range.error());
+            }
+            sandbox::OpResult r = sandbox::run_fs_op("read", base, *rel, *range);
             if (!r.ok) {
                 return std::unexpected(kernel::KernelError{r.output.empty() ? "fs.read failed"
                                                                             : r.output});

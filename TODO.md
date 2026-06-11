@@ -192,6 +192,11 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
 - [x] fs **read** primitives via sandbox children: `fs.read` (4 MiB cap, rejects dirs),
       `fs.list` (bounded sorted listing, dirs marked, symlinks omitted). Belt (`path.resolve`)
       in the prim + suspenders (Landlock read-confined child).
+- [x] fs.read **range reads** (cheap win from the GPT-5.5 review): optional 1-based
+      `offset` + `limit` line window, threaded `fs_read.json` (RefDefault `0` ⇒ whole file,
+      back-compat) → effect → `read_range_spec` (typed/clamped, wrong type rejected, never
+      coerced) → `"offset:limit"` helper arg → pure `slice_lines` (byte-faithful, terminators
+      kept). Pure-logic, confined-path, arg-spec, and full-Runtime integration tests all green.
 - [x] fs **write** primitives (M7c): `fs.write` (create/overwrite, content via the child's
       stdin so it never goes through argv) and `fs.edit` (exact-match replacement, fails unless
       the match count equals `expected_replacements` so edits never silently mis-apply). The
