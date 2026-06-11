@@ -24,6 +24,7 @@
 #include <ftxui/component/mouse.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/dom/table.hpp>
 #include <ftxui/screen/color.hpp>
 
 #include "frontends/common.hpp"
@@ -146,14 +147,17 @@ Element config_modal_content(const std::string& model, const std::string& base_u
 }
 
 Element commands_modal_content() {
-    Elements rows;
+    std::vector<std::vector<Element>> rows;
+    rows.push_back({text("Command"), text("Description")});
     for (const astrite::tui::SlashCommand& c : astrite::tui::all_commands()) {
-        rows.push_back(hbox({
-            text(c.name) | color(Color::CyanLight) | size(WIDTH, EQUAL, 14),
-            text(c.summary) | color(Color::GrayLight),
-        }));
+        rows.push_back({text(c.name) | color(Color::CyanLight),
+                        text(c.summary) | color(Color::GrayLight)});
     }
-    return vbox(std::move(rows));
+    Table table(rows);
+    table.SelectAll().Border(LIGHT);
+    table.SelectRow(0).Decorate(bold);
+    table.SelectRow(0).Border(LIGHT);
+    return table.Render();
 }
 
 // Help content is authored as markdown and rendered through the same renderer
@@ -194,17 +198,18 @@ Element status_modal_content(const std::string& model, const std::string& worksp
             ++turns;
         }
     }
-    auto row = [](std::string k, std::string v) {
-        return hbox({text(k) | dim | size(WIDTH, EQUAL, 14), text(std::move(v))});
-    };
-    return vbox({
-        row("model", model),
-        row("workspace", workspace),
-        row("segments", std::to_string(t.segments().size())),
-        row("user turns", std::to_string(turns)),
-        row("tool calls", std::to_string(tools)),
-        row("state", active ? "working" : "ready"),
+    Table table(std::vector<std::vector<Element>>{
+        {text("model"), text(model)},
+        {text("workspace"), text(workspace)},
+        {text("segments"), text(std::to_string(t.segments().size()))},
+        {text("user turns"), text(std::to_string(turns))},
+        {text("tool calls"), text(std::to_string(tools))},
+        {text("state"), text(active ? "working" : "ready") |
+                            color(active ? Color::YellowLight : Color::GreenLight)},
     });
+    table.SelectAll().Border(LIGHT);
+    table.SelectColumn(0).Decorate(dim);
+    return table.Render();
 }
 
 } // namespace
@@ -281,11 +286,15 @@ int main(int argc, char** argv) {
     auto seg_count = [&] { return static_cast<int>(transcript.segments().size()); };
     auto turn_active = [&] { return transcript.turn_active(); };
 
-    // Pump runtime events onto the UI thread as Closures (Post is thread-safe and
-    // wakes the loop), so transcript mutation happens on the UI thread — no mutex.
+    // Pump runtime events onto the UI thread. The Closure applies the transcript
+    // update on the UI thread (so no mutex is needed); the Event::Custom is what
+    // actually triggers the redraw. FTXUI is event-driven, not reactive — a Closure
+    // task runs but does NOT invalidate the frame; only Event/AnimationTask do
+    // (verified empirically). Both are queued in order, so apply-then-render.
     std::jthread pump([&] {
         while (auto event = runtime.events().pop()) {
             screen.Post([&transcript, ev = std::move(*event)] { transcript.apply(ev); });
+            screen.PostEvent(Event::Custom);
         }
     });
 
