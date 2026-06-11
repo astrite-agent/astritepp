@@ -13,6 +13,7 @@
 #include "frontends/common.hpp"
 #include "runtime/runtime.hpp"
 #include "sandbox/sandbox.hpp"
+#include "util/dotenv.hpp"
 #include "util/overloaded.hpp"
 
 namespace fs = std::filesystem;
@@ -23,6 +24,7 @@ int main(int argc, char** argv) {
     if (int rc = sandbox::maybe_run_helper(argc, argv); rc >= 0) {
         return rc;
     }
+    astrite::util::load_dotenv(); // pick up provider keys from a local .env (env wins)
 
     auto components = frontends::load_components();
     if (!components.has_value()) {

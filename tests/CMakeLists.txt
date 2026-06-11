@@ -8,6 +8,7 @@ add_executable(astrite_tests
     authority_test.cpp
     sse_test.cpp
     openai_compat_test.cpp
+    dotenv_test.cpp
     runtime_test.cpp
     transcript_test.cpp
     sandbox_test.cpp

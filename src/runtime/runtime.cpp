@@ -10,8 +10,8 @@
 #include "kernel/eval.hpp"
 #include "kernel/prims.hpp"
 #include "kernel/trust.hpp"
-#include "llm/openai_compat.hpp"
 #include "llm/provider.hpp"
+#include "llm/provider_factory.hpp"
 #include "runtime/fs_read_args.hpp"
 #include "runtime/proposals.hpp"
 #include "runtime/task_args.hpp"
@@ -56,15 +56,14 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
         opts.workspace_root = std::filesystem::current_path(ec);
     }
     if (!opts.chat) {
-        auto cfg = llm::Config::from_env();
-        if (!cfg.has_value()) {
-            return std::unexpected("runtime: " + cfg.error());
+        auto provider = llm::make_provider_from_env();
+        if (!provider.has_value()) {
+            return std::unexpected("runtime: " + provider.error());
         }
-        std::shared_ptr<llm::Provider> provider =
-            std::make_shared<llm::OpenAiCompatProvider>(std::move(*cfg));
-        opts.chat = [provider](const Value& messages, const Value& tools,
-                               llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
-            return provider->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
+        std::shared_ptr<llm::Provider> p = std::move(*provider);
+        opts.chat = [p](const Value& messages, const Value& tools,
+                        llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
+            return p->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
         };
     }
 

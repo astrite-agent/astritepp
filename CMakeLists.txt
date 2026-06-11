@@ -61,6 +61,7 @@ find_package(CURL REQUIRED)
 add_library(astrite_llm STATIC
     src/llm/http.cpp
     src/llm/openai_compat.cpp
+    src/llm/provider_factory.cpp
 )
 target_link_libraries(astrite_llm PUBLIC astrite_core CURL::libcurl)
 

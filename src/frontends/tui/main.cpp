@@ -41,6 +41,7 @@
 #include "frontends/tui/widgets.hpp"
 #include "runtime/runtime.hpp"
 #include "sandbox/sandbox.hpp"
+#include "util/dotenv.hpp"
 
 namespace {
 
@@ -210,6 +211,7 @@ int main(int argc, char** argv) {
     if (int rc = astrite::sandbox::maybe_run_helper(argc, argv); rc >= 0) {
         return rc;
     }
+    astrite::util::load_dotenv(); // pick up provider keys from a local .env (env wins)
 
     auto components = astrite::frontends::load_components();
     if (!components.has_value()) {
