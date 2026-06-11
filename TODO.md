@@ -273,6 +273,23 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       Esc cancels). Emacs editing via bound `cursor_position`: Ctrl-A/E (line ends), Ctrl-U/K
       (kill to start/end), Ctrl-W/Alt-Backspace (kill word back), Alt-b/f (word motion),
       Alt-d (kill word forward). Follow-ups to expand: kill-ring, vi command mode.
+- [x] **FTXUI leverage pass, 2026-06-11** ("use the native thing, don't hand-roll"): `clear_under`
+      modal backdrop (the idiom FTXUI's own Modal uses); OSC-8 `hyperlink()` markdown links;
+      `hflow` for styled wrapping (what `paragraph()` uses internally); RAF spinner +
+      `Post(Closure)`+`Event::Custom` plumbing (ticker thread + mutex gone); `/commands` & `/status`
+      as `Table`; token-usage `gauge()` + `graph()` from real `stream_options.include_usage` data
+      (context indicator in header, gauge+sparkline in /status); built-in mouse drag-selection
+      styled via `selection*` decorators. Off-screen `Screen` render tests guard composition.
+- [x] **Render-loop bug found+fixed (2026-06-11)**: FTXUI is event-driven, not reactive — a
+      `Closure` task runs but does NOT invalidate the frame; only Event/AnimationTask do (proven
+      with a render-counting harness). Out-of-band updates must `PostEvent(Event::Custom)`.
+- [ ] **Interactive-component hosting (Collapsible cards, completion as a focusable widget, config
+      Checkboxes)** — all need a root-`Container` + FTXUI-managed-focus rearchitecture, which is the
+      M8 UiTree-interpreter shape. Assessed (2026-06-11) as a focused effort, not a bolt-on onto the
+      single-`Renderer`+`CatchEvent` model. **Finding:** the completion popup as a `Menu` is a
+      *non-improvement* — a `Menu` wants focus while the user types in the `Input`; the current
+      DOM autocomplete (Input focused + manual selected-index + rendered list) is the idiomatic
+      pattern for autocomplete-under-input, like `Input` itself being the one component worth using.
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,
