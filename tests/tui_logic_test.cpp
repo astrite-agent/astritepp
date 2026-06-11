@@ -3,6 +3,7 @@
 #include <string>
 
 #include "frontends/tui/commands.hpp"
+#include "frontends/tui/history.hpp"
 #include "frontends/tui/view_state.hpp"
 
 using namespace astrite::tui;
@@ -51,6 +52,44 @@ TEST_CASE("lookup resolves a command line's leading token") {
     CHECK(lookup("/help") == lookup("/help me"));   // first token only
     CHECK(lookup("/nope") == nullptr);
     CHECK(lookup("not a command") == nullptr);
+}
+
+TEST_CASE("history: empty history recall returns the current text") {
+    History h;
+    CHECK(h.up("x") == "x");
+    CHECK(h.down("x") == "x");
+}
+
+TEST_CASE("history: up/down walk entries and preserve the draft") {
+    History h;
+    h.push("a");
+    h.push("b");
+    CHECK(h.up("draft") == "b"); // draft captured
+    CHECK(h.up("b") == "a");
+    CHECK(h.up("a") == "a"); // clamps at oldest
+    CHECK(h.down("a") == "b");
+    CHECK(h.down("b") == "draft"); // draft restored at the end
+}
+
+TEST_CASE("history: empties skipped, consecutive duplicates collapsed") {
+    History h;
+    h.push("");      // ignored
+    h.push("a");
+    h.push("a");     // duplicate of last, collapsed
+    h.push("b");
+    CHECK(h.items().size() == 2); // [a, b]
+}
+
+TEST_CASE("history: reverse search finds the most recent containing match") {
+    History h;
+    h.push("read foo");
+    h.push("write bar");
+    h.push("read baz");
+    CHECK(h.search_backward("read", 2) == 2); // newest "read*" is index 2
+    CHECK(h.search_backward("read", 1) == 0); // older search skips index 2
+    CHECK(h.search_backward("bar", 2) == 1);
+    CHECK(h.search_backward("zzz", 2) == -1);
+    CHECK(h.search_backward("", 2) == -1); // empty query never matches
 }
 
 TEST_CASE("view state: focus toggles between input and transcript") {

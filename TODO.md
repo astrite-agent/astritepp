@@ -265,6 +265,14 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
 - [x] **`/config` interactive dialog**: a modal showing runtime info (model, base url, workspace,
       authority policy, session) + selectable preference toggles (render markdown, always-index)
       flipped with Enter/Space. Persistent file-backed config remains M10.
+- [x] **Readline-style input, 2026-06-10**: not GNU readline (terminal-ownership conflict with
+      FTXUI + GPL vs our MIT/Apache, minimal-dep ethos) — a focused extension of FTXUI's Input.
+      Removed the default `inverted` transform (no more white input background). Pure tested
+      `history.hpp`: Up/Down recall with draft preservation + backward substring search.
+      **Ctrl-R reverse-i-search** mode (type to narrow, Ctrl-R cycles older, Enter accepts,
+      Esc cancels). Emacs editing via bound `cursor_position`: Ctrl-A/E (line ends), Ctrl-U/K
+      (kill to start/end), Ctrl-W/Alt-Backspace (kill word back), Alt-b/f (word motion),
+      Alt-d (kill word forward). Follow-ups to expand: kill-ring, vi command mode.
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,

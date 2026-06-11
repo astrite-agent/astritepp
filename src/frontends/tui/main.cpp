@@ -30,6 +30,7 @@
 
 #include "frontends/common.hpp"
 #include "frontends/tui/commands.hpp"
+#include "frontends/tui/history.hpp"
 #include "frontends/tui/markdown_render.hpp"
 #include "frontends/tui/transcript.hpp"
 #include "frontends/tui/view_state.hpp"
@@ -264,6 +265,26 @@ int main(int argc, char** argv) {
     int config_sel = 0;
     bool pref_markdown = true;
     bool pref_index = false;
+    int cursor_pos = 0;               // shared with the Input widget (readline editing)
+    astrite::tui::History history;    // Up/Down recall + Ctrl-R search
+    bool rsearch = false;             // reverse-i-search mode
+    std::string rquery;               // the search query being typed
+    std::string rsearch_draft;        // input restored if the search is cancelled
+    int rmatch = -1;                  // history index of the current match
+
+    // Word boundaries for Ctrl-W / Alt-b / Alt-f / Alt-d.
+    auto word_back = [](const std::string& s, int p) {
+        int i = p;
+        while (i > 0 && s[static_cast<size_t>(i) - 1] == ' ') --i;
+        while (i > 0 && s[static_cast<size_t>(i) - 1] != ' ') --i;
+        return i;
+    };
+    auto word_fwd = [](const std::string& s, int p) {
+        int n = static_cast<int>(s.size()), i = p;
+        while (i < n && s[static_cast<size_t>(i)] == ' ') ++i;
+        while (i < n && s[static_cast<size_t>(i)] != ' ') ++i;
+        return i;
+    };
 
     const char* env_base = std::getenv("OPENAI_BASE_URL");
     const std::string base_url = env_base != nullptr ? env_base : "https://api.openai.com/v1";
@@ -346,11 +367,22 @@ int main(int argc, char** argv) {
     InputOption input_opt;
     input_opt.placeholder = "message astrite++  ·  / for commands  ·  Tab for transcript";
     input_opt.multiline = false;
+    input_opt.cursor_position = &cursor_pos;
+    // No inverted/white-background field; just dim the placeholder. The terminal
+    // cursor is drawn by FTXUI independently of this.
+    input_opt.transform = [](InputState state) {
+        if (state.is_placeholder) {
+            state.element |= dim;
+        }
+        return state.element;
+    };
+    input_opt.on_change = [&] { history.reset(); }; // typing exits history navigation
     input_opt.on_enter = [&] {
         std::string text = input_text;
         if (text.empty()) {
             return;
         }
+        history.push(text);
         if (!text.empty() && text.front() == '/') {
             run_command(text);
             input_text.clear();
@@ -432,11 +464,19 @@ int main(int argc, char** argv) {
             stack.push_back(vbox(std::move(rows)) | borderLight | color(Color::CyanLight));
         }
 
-        stack.push_back(hbox({text(active ? "~ " : "› ") | bold, input->Render() | flex}));
+        if (rsearch) {
+            stack.push_back(hbox({
+                text("(reverse-i-search)`" + rquery + "': ") | color(Color::YellowLight),
+                text(input_text) | flex,
+            }));
+        } else {
+            stack.push_back(hbox({text(active ? "~ " : "› ") | bold, input->Render() | flex}));
+        }
 
-        std::string hints = transcript_focus
-                                ? " ↑/↓ select · enter collapse · tab input · /help "
-                                : " enter send · tab transcript · esc cancel · /help ";
+        std::string hints = rsearch ? " type to search · ctrl-r older · enter accept · esc cancel "
+                            : transcript_focus
+                                ? " ↑/↓ j/k select · enter collapse · tab input · /help "
+                                : " enter send · ↑/↓ history · ctrl-r search · tab transcript · /help ";
         stack.push_back(hbox({text(hints) | dim, filler(),
                               following ? text("") : text("↓ more (End) ") | color(Color::YellowLight)}));
 
@@ -541,6 +581,42 @@ int main(int argc, char** argv) {
             return true;
         }
 
+        // Reverse-i-search (Ctrl-R) mode captures all keys.
+        if (rsearch) {
+            const auto& items = history.items();
+            if (e == Event::Return) {
+                rsearch = false;
+                cursor_pos = static_cast<int>(input_text.size());
+            } else if (e == Event::Escape || e.input() == "\x07") { // Esc / Ctrl-G cancel
+                input_text = rsearch_draft;
+                rsearch = false;
+                cursor_pos = static_cast<int>(input_text.size());
+            } else if (e.input() == "\x12") { // Ctrl-R: next older match
+                int from = rmatch <= 0 ? -1 : rmatch - 1;
+                int next = history.search_backward(rquery, from);
+                if (next >= 0) {
+                    rmatch = next;
+                    input_text = items[static_cast<size_t>(rmatch)];
+                }
+            } else if (e == Event::Backspace) {
+                if (!rquery.empty()) {
+                    rquery.pop_back();
+                }
+                rmatch = history.search_backward(rquery, static_cast<int>(items.size()) - 1);
+                input_text = rmatch >= 0 ? items[static_cast<size_t>(rmatch)] : std::string{};
+            } else if (e.is_character()) {
+                rquery += e.character();
+                rmatch = history.search_backward(rquery, static_cast<int>(items.size()) - 1);
+                if (rmatch >= 0) {
+                    input_text = items[static_cast<size_t>(rmatch)];
+                }
+            } else {
+                rsearch = false; // any other key accepts the current match and exits
+                cursor_pos = static_cast<int>(input_text.size());
+            }
+            return true;
+        }
+
         // Input focus.
         auto candidates = astrite::tui::complete(input_text);
         if (!candidates.empty()) {
@@ -562,6 +638,68 @@ int main(int argc, char** argv) {
         } else if (e == Event::Tab) {
             view_state.focus_transcript(seg_count());
             return true;
+        }
+
+        // History recall (no completion popup active).
+        if (e == Event::ArrowUp) {
+            input_text = history.up(input_text);
+            cursor_pos = static_cast<int>(input_text.size());
+            return true;
+        }
+        if (e == Event::ArrowDown) {
+            input_text = history.down(input_text);
+            cursor_pos = static_cast<int>(input_text.size());
+            return true;
+        }
+
+        // Readline-style editing (Ctrl + Alt).
+        if (e.input() == "\x12") { // Ctrl-R: enter reverse search
+            rsearch = true;
+            rquery.clear();
+            rmatch = -1;
+            rsearch_draft = input_text;
+            return true;
+        }
+        {
+            int n = static_cast<int>(input_text.size());
+            cursor_pos = std::clamp(cursor_pos, 0, n);
+            if (e.input() == "\x01") { // Ctrl-A: line start
+                cursor_pos = 0;
+                return true;
+            }
+            if (e.input() == "\x05") { // Ctrl-E: line end
+                cursor_pos = n;
+                return true;
+            }
+            if (e.input() == "\x15") { // Ctrl-U: kill to start
+                input_text.erase(0, static_cast<size_t>(cursor_pos));
+                cursor_pos = 0;
+                return true;
+            }
+            if (e.input() == "\x0b") { // Ctrl-K: kill to end
+                input_text.erase(static_cast<size_t>(cursor_pos));
+                return true;
+            }
+            if (e.input() == "\x17" || e.input() == "\x1b\x7f") { // Ctrl-W / Alt-Backspace
+                int b = word_back(input_text, cursor_pos);
+                input_text.erase(static_cast<size_t>(b), static_cast<size_t>(cursor_pos - b));
+                cursor_pos = b;
+                return true;
+            }
+            if (e.input() == "\x1b" "b") { // Alt-b: word back
+                cursor_pos = word_back(input_text, cursor_pos);
+                return true;
+            }
+            if (e.input() == "\x1b" "f") { // Alt-f: word forward
+                cursor_pos = word_fwd(input_text, cursor_pos);
+                return true;
+            }
+            if (e.input() == "\x1b" "d") { // Alt-d: kill word forward
+                int f = word_fwd(input_text, cursor_pos);
+                input_text.erase(static_cast<size_t>(cursor_pos),
+                                 static_cast<size_t>(f - cursor_pos));
+                return true;
+            }
         }
 
         if (e == Event::Escape) {
