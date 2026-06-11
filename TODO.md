@@ -205,13 +205,28 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       (proven). `fs.delete`/`fs.mkdir`/`fs.rename` still pending (with the task/transaction half).
 - [x] `search.find`: bounded literal text search (path:line:text, capped); skips symlinks,
       binary files, and VCS/build state dirs. (Linear-time regex engine only if/when justified.)
-- [ ] `task` component kind (DESIGN §4/§6): pinned argv template with typed, shape-validated
-      holes (`ident`/`path-seg`/enum/int-range; **never option position**; `--` separators pinned
-      in the template), cwd anchor, effect class (`check` | `produce` + declared product paths),
-      `net` declaration (consent-diffed), timeout, output caps.
-- [ ] `task.run` — the **only** execution primitive, `dispatch`'s twin: verb resolved against the
-      static task table; parameters bind as discrete argv elements; the model selects, never
-      composes.
+- [x] `task` component kind (DESIGN §4/§6), **MVP (check-only)**: a `task` block
+      (`argv`/`cwd`/`effect`/`net`/`writable`/`timeout_ms`/`output_cap_bytes`) desugared by the
+      loader to a pinned `{do: "task.run", with: {spec}, as: "out"}` action — so it walks like
+      every other component, no special execution path. argv is embedded as a literal, which
+      structurally forbids `{ref}` holes (select the verb, never compose it). cwd anchor + a
+      declared `writable` subtree set; `net:true` rejected at load. **Deferred:** typed holes
+      (`ident`/`path-seg`/enum/int-range), the pinned-`--` separator grammar, and the
+      `produce`/promotion half (below).
+- [x] `task.run` — the **only** execution primitive, `dispatch`'s twin: a capability-gated effect
+      (`task.run`) that turns the pinned spec into a confined `sandbox::run_task` (fork+exec a
+      declared program under the same floor: no_new_privs → seccomp net-deny → Landlock read on
+      workspace+system, write on declared subtrees; stdout/stderr captured + capped; process-group
+      timeout kill; spawn-vs-exit disambiguated). Returns structured `{status, code, stdout,
+      stderr, timed_out, …}` the model reads; a non-zero exit or failed spawn is a *result*, not a
+      walk error. Device floor: tasks get read+write on `/dev` (DAC backstops) — required for
+      ninja's `posix_spawn` stdin-from-`/dev/null` and compiler `-o /dev/null` checks.
+- [x] Model selects task verbs: `task` components surface in `tool_definitions` (empty arg schema,
+      since argv is pinned). Repo-local task verbs load from `.astrite/components/*.json` (new
+      names beyond embedded defaults; same fail-closed + "trust gate at M9" notice as overrides) —
+      so cmake/ctest verbs ship per-repo rather than presumed everywhere. astrite++ dogfoods
+      `build`/`test`; the live `build` (`cmake --build build`) is proven to compile + link the
+      whole project under confinement.
 - [ ] Transactions: persistent task-scoped scratch (reflink/CoW where the fs supports it; copy +
       skip-lists elsewhere — caches persist so hermetic stays fast); no network unless declared;
       settle to `{status, output (capped, untrusted), delta}`; `check` promotes nothing,
@@ -223,8 +238,8 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
 - [ ] Argument-injection corpus: leading-dash hole values rejected, option-position holes
       rejected at load, pinned `--` honored.
 - [x] fs tool components embedded + authority-checked: `fs_read.json`, `fs_list.json`,
-      `search_find.json`, `fs_write.json`, `fs_edit.json`. (`workspace_context` + dogfood task
-      components pending with the task half.)
+      `search_find.json`, `fs_write.json`, `fs_edit.json`. Repo-local `build`/`test` task verbs
+      ship under `.astrite/components/`. (`workspace_context` orientation tool still pending.)
 - [x] End-to-end confinement check (live, 2026-06-10): model listed `components/`, read
       `echo.json`, and an attempted `/etc/hostname` read was rejected by the belt
       (`absolute path is an escape`); the suspenders (Landlock denying `..` past the base even

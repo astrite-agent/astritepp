@@ -129,6 +129,18 @@ TEST_CASE("run_task: stdout is capped and the truncation is flagged") {
     fs::remove_all(ws);
 }
 
+TEST_CASE("run_task: the standard null devices are available to tools") {
+    // Real build tools (ninja, compilers) open /dev/null — e.g. ninja redirects a
+    // child's stdin from it via posix_spawn file actions. The task floor must grant
+    // it without the component declaring anything.
+    fs::path ws = make_ws("devnull");
+    auto r = run_task(sh_spec(ws, "printf hi > /dev/null && cat /dev/null && printf done"));
+    CHECK(r.spawned);
+    CHECK(r.code == 0);
+    CHECK(r.out == "done");
+    fs::remove_all(ws);
+}
+
 TEST_CASE("run_task: a missing program is a spawn failure, not a crash") {
     fs::path ws = make_ws("nospawn");
     TaskSpec s;

@@ -462,6 +462,69 @@ TEST_CASE("fs.read tool: a wrong-typed offset surfaces as recoverable tool conte
     CHECK(tool_result(fx.session).find("`offset` must be an integer") != std::string::npos);
 }
 
+namespace {
+// A check-only task component: pinned argv, no holes. printf is a real tool in
+// the system bases run_task grants, so this exercises the whole chain.
+constexpr std::string_view SAY_TASK_JSONC = R"({
+  "component": "say",
+  "kind": "task",
+  "caps": ["task.run"],
+  "description": "Print a fixed greeting.",
+  "task": {"argv": ["printf", "hello from task"], "cwd": "workspace", "effect": "check"}
+})";
+
+runtime::Options say_options(const fs::path& session, const fs::path& ws, runtime::ChatFn chat) {
+    runtime::Options opts = test_options(session, std::move(chat));
+    opts.workspace_root = ws;
+    auto say = load_component_jsonc(SAY_TASK_JSONC);
+    REQUIRE(say.has_value());
+    opts.components.emplace("say", std::move(*say));
+    return opts;
+}
+} // namespace
+
+TEST_CASE("task components are model-callable tools (with an empty arg schema)") {
+    fs::path file = temp_session();
+    bool saw_say = false;
+    runtime::Options opts = say_options(
+        file, fs::temp_directory_path(),
+        [&](const Value&, const Value& tools, llm::StreamAccumulator::DeltaSink,
+            std::stop_token) -> std::expected<llm::CompletedTurn, std::string> {
+            for (const Value& def : *tools.as_list()) {
+                if (*def.get("function")->get("name") == Value::str("say")) {
+                    saw_say = true;
+                    CHECK(def.get("function")->get("parameters") != nullptr);
+                }
+            }
+            return llm::CompletedTurn{"ok", {}, "stop", {}};
+        });
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("x"));
+    CHECK(saw_say);
+    fs::remove(file);
+}
+
+TEST_CASE("task component: a tool call runs the confined task, structured result returns") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_task_e2e";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+
+    ScriptedChat chat;
+    chat.script.push_back({"", {{"c1", "say", "{}"}}, "tool_calls", {}});
+    chat.script.push_back({"ran it", {}, "stop", {}});
+
+    auto rt = runtime::Runtime::create(say_options(file, ws, chat.fn()));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("run say"));
+    std::string content = tool_result(file);
+    CHECK(content.find("passed") != std::string::npos);          // status: passed
+    CHECK(content.find("hello from task") != std::string::npos); // captured stdout
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
 TEST_CASE("transcript continuity across submits; system prompt seeded exactly once") {
     fs::path file = temp_session();
     ScriptedChat chat;

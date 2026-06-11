@@ -292,7 +292,10 @@ void Runtime::register_effects() {
 Value Runtime::tool_definitions() const {
     Value::List defs;
     for (const auto& [name, component] : opts_.components) {
-        if (component.kind != "tool") {
+        // Both `tool` and `task` components are model-callable: the model selects
+        // a verb by calling it. A task's argv is pinned, so it takes no model
+        // arguments — it gets an empty object schema unless it declares one.
+        if (component.kind != "tool" && component.kind != "task") {
             continue;
         }
         Value fn = Value::object();
@@ -302,6 +305,11 @@ Value Runtime::tool_definitions() const {
         }
         if (component.parameters.has_value()) {
             fn.set("parameters", *component.parameters);
+        } else if (component.kind == "task") {
+            Value schema = Value::object();
+            schema.set("type", Value::str("object"));
+            schema.set("properties", Value::object());
+            fn.set("parameters", std::move(schema));
         }
         Value def = Value::object();
         def.set("type", Value::str("function"));

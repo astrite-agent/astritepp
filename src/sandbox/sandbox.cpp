@@ -779,6 +779,20 @@ TaskResult run_task(const TaskSpec& spec) {
     Policy policy;
     policy.read_paths = spec.read_paths;
     policy.write_paths = spec.write_paths;
+    // The irreducible device floor every program expects (read+write on /dev).
+    // Without it, ninja's posix_spawn — which redirects a child's stdin from
+    // /dev/null — fails EACCES, and compilers can't `-o /dev/null` in feature
+    // checks. Granted here, not by the caller, because it is a property of
+    // "running a program," not of any one task's declared policy. Granting the
+    // whole /dev is safe: Landlock only ever *removes* access, so ordinary DAC
+    // permissions remain the backstop — a non-root task still cannot open block
+    // devices, /dev/mem, etc.; only world-accessible nodes (/dev/null, …) work.
+    {
+        std::error_code ec;
+        if (std::filesystem::exists("/dev", ec)) {
+            policy.write_paths.emplace_back("/dev");
+        }
+    }
 
     int out_fds[2];
     int err_fds[2];
