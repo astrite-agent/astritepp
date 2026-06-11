@@ -1,0 +1,12 @@
+{
+  // Show the net changes the agent has made this session, as a unified diff —
+  // kernel-generated (no git), scoped to the agent's own writes. Use it to
+  // review and explain edits before finishing.
+  "component": "diff_workspace",
+  "kind": "tool",
+  "caps": ["diff.workspace"],
+  "description": "Show a unified diff of the changes made so far this session (the agent's own edits).",
+  "parameters": {"type": "object", "properties": {}},
+  "tree": {"do": "diff.workspace", "as": "out"},
+  "output": {"ref": "out"}
+}

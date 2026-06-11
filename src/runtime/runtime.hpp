@@ -77,9 +77,19 @@ private:
     void register_effects();
     [[nodiscard]] schema::Value tool_definitions() const;
 
+    // One mutation the agent made this session: the file's content before and
+    // after. diff.workspace renders the net change per path — a trusted,
+    // git-free record of what the agent did (it only sees its own writes).
+    struct WriteRecord {
+        std::string path;
+        std::string before;
+        std::string after;
+    };
+
     Options opts_;
     Session session_;
     kernel::Registry registry_;
+    std::vector<WriteRecord> journal_; // turn-thread only (turns are serialized)
     EventChannel events_;
     schema::Value tool_defs_;
     std::mutex turn_mu_;             // one turn at a time

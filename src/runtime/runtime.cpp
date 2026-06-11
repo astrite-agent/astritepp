@@ -2,6 +2,7 @@
 
 #include <ctime>
 #include <fstream>
+#include <map>
 #include <utility>
 
 #include "kernel/authority.hpp"
@@ -17,6 +18,7 @@
 #include "sandbox/sandbox.hpp"
 #include "schema/load.hpp"
 #include "util/control_plane.hpp"
+#include "util/unified_diff.hpp"
 
 namespace astrite::runtime {
 
@@ -187,7 +189,7 @@ void Runtime::register_effects() {
 
     registry_.add_effect(
         "fs.write", "fs.write",
-        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+        [this, base](const Value& args) -> std::expected<Value, kernel::KernelError> {
             auto rel = confine_write(args, "fs.write");
             if (!rel.has_value()) {
                 return std::unexpected(rel.error());
@@ -196,16 +198,18 @@ void Runtime::register_effects() {
             if (content == nullptr || content->as_str() == nullptr) {
                 return std::unexpected(kernel::KernelError{"fs.write: `content` must be a string"});
             }
+            sandbox::OpResult before = sandbox::run_fs_op("read", base, *rel); // "" if new
             sandbox::OpResult r = sandbox::fs_write(base, *rel, *content->as_str());
             if (!r.ok) {
                 return std::unexpected(kernel::KernelError{r.output.empty() ? "fs.write failed"
                                                                             : r.output});
             }
+            journal_.push_back({*rel, before.ok ? before.output : "", *content->as_str()});
             return Value::str(std::move(r.output));
         });
     registry_.add_effect(
         "fs.edit", "fs.edit",
-        [base](const Value& args) -> std::expected<Value, kernel::KernelError> {
+        [this, base](const Value& args) -> std::expected<Value, kernel::KernelError> {
             auto rel = confine_write(args, "fs.edit");
             if (!rel.has_value()) {
                 return std::unexpected(rel.error());
@@ -226,12 +230,16 @@ void Runtime::register_effects() {
                         "fs.edit: `expected_replacements` must be a non-negative integer"});
                 }
             }
+            sandbox::OpResult before = sandbox::run_fs_op("read", base, *rel);
             sandbox::OpResult r =
                 sandbox::fs_edit(base, *rel, *old_text->as_str(), *new_text->as_str(), expected);
             if (!r.ok) {
                 return std::unexpected(kernel::KernelError{r.output.empty() ? "fs.edit failed"
                                                                             : r.output});
             }
+            sandbox::OpResult after = sandbox::run_fs_op("read", base, *rel);
+            journal_.push_back(
+                {*rel, before.ok ? before.output : "", after.ok ? after.output : ""});
             return Value::str(std::move(r.output));
         });
     registry_.add_effect(
@@ -250,6 +258,44 @@ void Runtime::register_effects() {
                 return std::unexpected(ts.error());
             }
             return task_result_value(sandbox::run_task(*ts));
+        });
+
+    registry_.add_effect(
+        "diff.workspace", "diff.workspace",
+        [this](const Value&) -> std::expected<Value, kernel::KernelError> {
+            // The net change per path from the session write-journal — kernel-
+            // generated, git-free, and scoped to what the agent itself wrote
+            // (first-seen `before` vs latest `after`). The read-side counterpart
+            // to fs.edit: make the change, then inspect and explain it.
+            std::map<std::string, std::pair<std::string, std::string>> nets;
+            std::vector<std::string> order;
+            for (const WriteRecord& w : journal_) {
+                auto [it, inserted] = nets.try_emplace(w.path, w.before, w.after);
+                if (inserted) {
+                    order.push_back(w.path);
+                } else {
+                    it->second.second = w.after;
+                }
+            }
+            Value::List files;
+            std::string unified;
+            for (const std::string& path : order) {
+                const auto& [bef, aft] = nets[path];
+                std::string d = util::unified_diff(bef, aft);
+                if (d.empty()) {
+                    continue; // net no-op (written then reverted)
+                }
+                Value f = Value::object();
+                f.set("path", Value::str(path));
+                f.set("diff", Value::str(d));
+                files.push_back(std::move(f));
+                unified += "--- a/" + path + "\n+++ b/" + path + "\n" + d;
+            }
+            Value out = Value::object();
+            out.set("count", Value::integer(static_cast<std::int64_t>(files.size())));
+            out.set("files", Value::list(std::move(files)));
+            out.set("unified", Value::str(std::move(unified)));
+            return out;
         });
 
     registry_.add_effect(

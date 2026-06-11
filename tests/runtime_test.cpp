@@ -532,6 +532,50 @@ TEST_CASE("fs.write tool: the model cannot write the control plane (.astrite)") 
     fs::remove(file);
 }
 
+TEST_CASE("diff.workspace: reports the net change the agent made this session") {
+    fs::path file = temp_session();
+    fs::path ws = fs::temp_directory_path() / "astrite_diff_e2e";
+    fs::remove_all(ws);
+    fs::create_directories(ws);
+
+    ScriptedChat chat;
+    chat.script.push_back(
+        {"", {{"c1", "fs_write", R"({"path":"notes.txt","content":"hello\nworld\n"})"}},
+         "tool_calls", {}});
+    chat.script.push_back({"", {{"c2", "diff_workspace", "{}"}}, "tool_calls", {}});
+    chat.script.push_back({"done", {}, "stop", {}});
+
+    runtime::Options opts = test_options(file, chat.fn());
+    opts.workspace_root = ws;
+    for (const char* name : {"fs_write", "diff_workspace"}) {
+        auto c = load_component_jsonc(name == std::string("fs_write")
+                                          ? components::FS_WRITE_JSONC
+                                          : components::DIFF_WORKSPACE_JSONC);
+        REQUIRE(c.has_value());
+        opts.components.emplace(name, std::move(*c));
+    }
+
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("write notes then diff"));
+
+    // The diff tool result (second tool message) shows the new file's additions.
+    runtime::Session session(file);
+    std::string diff_content;
+    for (const Value& m : *session.read()->get("messages")->as_list()) {
+        const Value* role = m.get("role");
+        if (role != nullptr && *role == Value::str("tool") &&
+            m.get("content")->as_str()->find("notes.txt") != std::string::npos) {
+            diff_content = *m.get("content")->as_str();
+        }
+    }
+    CHECK(diff_content.find("notes.txt") != std::string::npos);
+    CHECK(diff_content.find("+hello") != std::string::npos);
+    CHECK(diff_content.find("+world") != std::string::npos);
+    fs::remove_all(ws);
+    fs::remove(file);
+}
+
 TEST_CASE("component.propose: a valid candidate is staged and announced, not installed") {
     fs::path file = temp_session();
     fs::path ws = fs::temp_directory_path() / "astrite_propose_e2e";

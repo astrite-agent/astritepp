@@ -14,6 +14,7 @@ add_executable(astrite_tests
     trust_test.cpp
     fs_helper_test.cpp
     sha256_test.cpp
+    unified_diff_test.cpp
     trust_store_test.cpp
     range_test.cpp
     task_test.cpp
