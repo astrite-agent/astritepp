@@ -19,8 +19,20 @@
 
 ## 0. Status
 
-Greenfield. This document is the target; nothing below exists. The repository contains this file,
-`TODO.md`, and an empty tree.
+**Built and working — not greenfield.** The kernel (Value, the JSONC loader, the blackboard, the
+exhaustive-visit evaluator, the authority fold), the Linux sandbox floor (`no_new_privs → seccomp
+→ Landlock` via native syscalls), the OpenAI-compatible streaming client, the frontend-agnostic
+runtime, the **loop-as-data `turn` running live end-to-end**, sandboxed `fs.read/list/write/edit` +
+`search.find` tools, the `path.resolve`/`json.coerce` trust pair, and two frontends (a readline
+frontend and an FTXUI TUI) are implemented and tested.
+
+The rest of this document is the design *target*; **[TODO.md](TODO.md) is the source of truth for
+exactly what exists today.** In milestone terms (see §17): M0 partial (toolchain/vendoring/flags
+done; CI + release hardening pending), M1 sandbox floor done, M2 kernel done, M4 LLM client done,
+M5 runtime done, M6 loop-as-data done (constexpr-IR codegen pending), M7 fs tools done
+(tasks/transactions + delete/mkdir/rename pending). Ahead: M3 confined loader (disk overrides load
+in-process and un-gated today), M8 UiTree-as-data (a rich FTXUI TUI scaffold exists), M9
+trust/self-modification. Sections describing unbuilt work are marked **[planned]** / **[PHASE 2]**.
 
 ## 1. Why C++?
 

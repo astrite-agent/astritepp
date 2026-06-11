@@ -1,8 +1,8 @@
 #pragma once
 
 // The behavior-tree IR — which *is* the component schema (DESIGN §5). The loader
-// decodes YAML into exactly these shapes and rejects everything else. There are no
-// operators and no expression language: an argument is a literal, a structural
+// decodes JSONC into exactly these shapes and rejects everything else. There are
+// no operators and no expression language: an argument is a literal, a structural
 // {ref} lookup, or an explicit {ref, default} lookup.
 
 #include <cstdint>
