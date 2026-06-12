@@ -30,6 +30,7 @@
 #include <ftxui/screen/color.hpp>
 
 #include "frontends/common.hpp"
+#include "llm/provider_factory.hpp"
 #include "frontends/tui/commands.hpp"
 #include "frontends/tui/config.hpp"
 #include "frontends/tui/history.hpp"
@@ -242,6 +243,18 @@ int main(int argc, char** argv) {
     opts.session_file = std::filesystem::path(".astrite/sessions/current.jsonl");
     opts.system_prompt = astrite::frontends::system_prompt();
     opts.components = std::move(*components);
+    // A persisted in-app selection is authoritative: build that provider and inject
+    // it. Empty config => the runtime falls back to the env factory (ASTRITE_PROVIDER
+    // / inference). Keys always come from the environment, never config.
+    if (!cfg.provider.empty() || !cfg.model.empty()) {
+        auto built = astrite::llm::make_named_provider(cfg.provider, cfg.model);
+        if (built.has_value()) {
+            opts.provider = *built;
+        } else {
+            std::fprintf(stderr, "astrite-tui: %s (using environment default)\n",
+                         built.error().c_str());
+        }
+    }
     auto rt = astrite::runtime::Runtime::create(std::move(opts));
     if (!rt.has_value()) {
         std::fprintf(stderr, "astrite-tui: %s\n", rt.error().c_str());
@@ -252,8 +265,10 @@ int main(int argc, char** argv) {
     // Identity comes from the *live* provider the runtime built (factory-selected),
     // not OpenAI env vars — so the header/status/config tell the truth on every
     // backend. (Empty only in the test path where a chat fn is injected.)
-    const std::string provider = runtime.provider_name();
-    const std::string model = runtime.model();
+    // Mutable: a live /model or /provider switch updates these, and the header /
+    // status / config read them by reference from their render closures.
+    std::string provider = runtime.provider_name();
+    std::string model = runtime.model();
     const std::string workspace = std::filesystem::current_path().string();
 
     ScreenInteractive screen = ScreenInteractive::Fullscreen();
@@ -298,7 +313,7 @@ int main(int argc, char** argv) {
         return i;
     };
 
-    const std::string base_url = runtime.base_url();
+    std::string base_url = runtime.base_url();
     const char* env_policy = std::getenv("ASTRITE_AUTHORITY_POLICY");
     const std::string policy = env_policy != nullptr ? env_policy : "review";
     const std::string session_path = ".astrite/sessions/current.jsonl";
@@ -307,6 +322,9 @@ int main(int argc, char** argv) {
     const std::filesystem::path transcript_path = ".astrite/sessions/current.transcript.jsonl";
     transcript.restore(astrite::tui::load_transcript(transcript_path));
     auto persist = [&] { astrite::tui::save_transcript(transcript_path, transcript.segments()); };
+    // Off-UI-thread slot for /models (a network call); auto-joined on reassign/exit.
+    // Declared after the objects its closures reference so it is destroyed first.
+    std::optional<std::jthread> models_job;
     // Prefer the provider's real context window; fall back to env, then a default.
     const char* env_ctx = std::getenv("OPENAI_CONTEXT_WINDOW");
     int context_window = runtime.context_window();
@@ -453,6 +471,79 @@ int main(int argc, char** argv) {
             } else {
                 transcript.notice(runtime.reject_proposal(arg) ? "rejected `" + arg + "`"
                                                                : "no staged proposal `" + arg + "`");
+            }
+            following = true;
+            scroll = 1.0f;
+        } else if (n == "/model" || n == "/provider") {
+            std::string arg = line.size() > n.size() ? line.substr(n.size() + 1) : "";
+            while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
+            while (!arg.empty() && arg.back() == ' ') arg.pop_back();
+            if (arg.empty()) {
+                transcript.notice(std::string("usage: ") +
+                                  (n == "/model" ? "/model <model-id>" : "/provider <name> [model]"));
+            } else if (turn_active()) {
+                // set_provider takes the turn lock; don't block the UI mid-turn.
+                transcript.notice("finish the current turn before switching");
+            } else {
+                std::string want_provider, want_model;
+                if (n == "/model") {
+                    want_provider = runtime.provider_name(); // keep the current backend
+                    want_model = arg;
+                } else { // /provider <name> [model]
+                    const std::size_t sp = arg.find(' ');
+                    want_provider = arg.substr(0, sp);
+                    want_model = sp == std::string::npos ? std::string() : arg.substr(sp + 1);
+                    while (!want_model.empty() && want_model.front() == ' ')
+                        want_model.erase(want_model.begin());
+                }
+                auto built = astrite::llm::make_named_provider(want_provider, want_model);
+                if (!built.has_value()) {
+                    transcript.notice("could not switch: " + built.error());
+                } else {
+                    runtime.set_provider(*built);
+                    provider = runtime.provider_name();
+                    model = runtime.model();
+                    base_url = runtime.base_url();
+                    context_window = runtime.context_window();
+                    if (context_window <= 0) {
+                        context_window = env_ctx != nullptr ? std::max(1, std::atoi(env_ctx)) : 128000;
+                    }
+                    cfg.provider = provider; // persist the in-app choice
+                    cfg.model = model;
+                    (void)astrite::tui::save_config(config_path, cfg);
+                    transcript.notice("switched to " + provider + " · " + model);
+                }
+            }
+            following = true;
+            scroll = 1.0f;
+        } else if (n == "/models") {
+            if (provider.empty()) {
+                transcript.notice("no live provider — model selection unavailable");
+            } else {
+                transcript.notice("fetching models from " + provider + " …");
+                // The catalog is a network call: run it off the UI thread and post
+                // the result back. Reassigning the slot joins any prior fetch.
+                models_job = std::jthread([&runtime, &screen, &transcript, transcript_path] {
+                    auto models = runtime.list_models();
+                    screen.Post([&transcript, transcript_path, models = std::move(models)] {
+                        if (!models.has_value()) {
+                            transcript.notice("models: " + models.error());
+                        } else if (models->empty()) {
+                            transcript.notice("models: (none reported)");
+                        } else {
+                            std::string list;
+                            for (const astrite::llm::ModelInfo& m : *models) {
+                                list += "\n  " + m.id;
+                                if (m.context_limit > 0) {
+                                    list += "  ctx=" + std::to_string(m.context_limit);
+                                }
+                            }
+                            transcript.notice("models:" + list);
+                        }
+                        astrite::tui::save_transcript(transcript_path, transcript.segments());
+                    });
+                    screen.PostEvent(Event::Custom); // Closures don't redraw; this does
+                });
             }
             following = true;
             scroll = 1.0f;

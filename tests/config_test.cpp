@@ -28,6 +28,8 @@ TEST_CASE("config: defaults match the intended out-of-box behavior") {
     CHECK(cfg.collapse_tool_calls == true);  // tool calls are noisy: fold by default
     CHECK(cfg.collapse_reasoning == true);    // reasoning is long: fold by default
     CHECK(cfg.show_reasoning == false);       // off => today's exact behavior
+    CHECK(cfg.provider.empty());              // empty => resolve provider from env
+    CHECK(cfg.model.empty());                 // empty => the provider's default model
 }
 
 TEST_CASE("config: round-trips through save/load") {
@@ -37,6 +39,8 @@ TEST_CASE("config: round-trips through save/load") {
     cfg.collapse_tool_calls = false;
     cfg.collapse_reasoning = false;
     cfg.show_reasoning = true;
+    cfg.provider = "anthropic";
+    cfg.model = "claude-opus-4-8";
 
     fs::path path = tmp("roundtrip");
     REQUIRE(save_config(path, cfg));
@@ -47,6 +51,8 @@ TEST_CASE("config: round-trips through save/load") {
     CHECK(loaded.collapse_tool_calls == false);
     CHECK(loaded.collapse_reasoning == false);
     CHECK(loaded.show_reasoning == true);
+    CHECK(loaded.provider == "anthropic");
+    CHECK(loaded.model == "claude-opus-4-8");
 }
 
 TEST_CASE("config: missing file loads defaults") {

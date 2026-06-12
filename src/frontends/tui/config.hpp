@@ -21,6 +21,8 @@ struct UiConfig {
     bool collapse_tool_calls = true; // tool segments start collapsed (they are noisy)
     bool collapse_reasoning = true;  // reasoning segments start collapsed (they are long)
     bool show_reasoning = false;     // request + surface provider reasoning traces at all
+    std::string provider;            // selected backend; "" = resolve from env / inference
+    std::string model;               // selected model; "" = the provider's default
 };
 
 // Write the config as pretty JSON. Returns false on any IO error.

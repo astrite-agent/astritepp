@@ -67,6 +67,14 @@ public:
         return provider_ ? provider_->base_url() : std::string();
     }
 
+    // The live provider's model catalog (a network call; run off the UI thread).
+    [[nodiscard]] std::expected<std::vector<llm::ModelInfo>, std::string> list_models() {
+        if (!provider_) {
+            return std::unexpected(std::string("no live provider"));
+        }
+        return provider_->list_models();
+    }
+
     // ---- consent: the human side of self-modification (B4). These are the ONLY
     // way a model-authored component becomes active. The model stages a proposal
     // (component.propose); a human reviews and accepts it here, which is what
