@@ -661,7 +661,11 @@ hash-pinned user-level trust record.
   blocks, tool_use/tool_result, `cache_control` on the stable prefix). Each owns its request
   translation (astrite's messages/tools are chat-completions-shaped; the native providers convert
   both ways) and its SSE event fold, surfacing a uniform `{text, tool_calls, finish, usage}` with
-  cache-read/write tokens. `ASTRITE_PROVIDER` selects; a local `.env` supplies keys.
+  cache-read/write tokens. `ASTRITE_PROVIDER` selects the launch default and a local `.env` supplies
+  keys; the TUI persists an in-app selection (provider + model) to `.astrite/config.json` and can
+  switch the live backend mid-session (`/model`, `/provider`) — `Runtime::set_provider` swaps the
+  provider under the turn lock, and because the message log is provider-neutral the conversation
+  continues unbroken (stale reasoning sidecars drop on the model mismatch). Keys never live in config.
   **Sharp edge:** streamed `tool_calls` arrive as index/id-keyed fragments accumulated across
   chunks before dispatch — the key is untrusted (map key only, never an allocation size), id/name
   overwrite, arguments append, capped distinct calls, incomplete entries filtered. Cancellation via

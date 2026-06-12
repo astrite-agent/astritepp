@@ -325,9 +325,10 @@ argv holes are the remaining M7 work; see the deferred items below.*
       `ui.markdown` constructor.
 - [x] **vi bindings**: j/k/g/G + Ctrl-U/Ctrl-D half-page on transcript nav and modal scroll
       (only where the user isn't typing). `select_relative` added to view-state (tested).
-- [x] **`/config` interactive dialog**: a modal showing runtime info (model, base url, workspace,
-      authority policy, session) + selectable preference toggles (render markdown, always-index)
-      flipped with Enter/Space. Persistent file-backed config remains M10.
+- [x] **`/config` interactive dialog**: a modal showing runtime info (provider, model, base url,
+      workspace, authority policy, session) + selectable preference toggles (render markdown,
+      always-index, collapse tool calls / reasoning, show reasoning) flipped with Enter/Space.
+      Now persisted to `.astrite/config.json` (see the provider↔TUI integration entry below).
 - [x] **Readline-style input, 2026-06-10**: not GNU readline (terminal-ownership conflict with
       FTXUI + GPL vs our MIT/Apache, minimal-dep ethos) — a focused extension of FTXUI's Input.
       Removed the default `inverted` transform (no more white input background). Pure tested
@@ -373,6 +374,16 @@ argv holes are the remaining M7 work; see the deferred items below.*
 - [x] **Finding (2026-06-11):** the completion popup as a `Menu` is a *non-improvement* — a `Menu`
       wants focus while the user types in the `Input`; the DOM autocomplete (Input focused + manual
       selected-index + rendered list) is the idiomatic autocomplete-under-input pattern, kept.
+- [x] **Full provider↔TUI integration + live model selection, 2026-06-11**: the header / `/status` /
+      `/config` now show the **real** backend (`Runtime::provider_name()/model()/base_url()` over
+      `Provider::base_url()`), fixing a bug where they printed OpenAI env defaults on every backend.
+      `UiConfig` (`.astrite/config.json`) gains `provider`/`model`; a persisted selection is built via
+      `make_named_provider(kind, model)` and injected through `Options::provider` at launch (config
+      authoritative; empty ⇒ env factory; keys always from env). Live switching: `Runtime::set_provider`
+      swaps the backend + chat closure under the turn lock (next turn uses it; the neutral message log
+      continues, stale reasoning auto-drops); commands `/model <id>`, `/provider <name> [model]`
+      (guarded vs mid-turn, persisted), and `/models` (catalog fetched off the UI thread). pty-verified:
+      switch mid-session, get a reply from the new backend, relaunch onto the saved one.
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,
