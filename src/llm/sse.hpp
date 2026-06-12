@@ -87,6 +87,8 @@ struct ToolCallDelta {
 struct Delta {
     std::optional<std::string> role;
     std::optional<std::string> content;
+    std::optional<std::string> reasoning_content; // DeepSeek-style reasoning trace
+    std::optional<std::string> reasoning;         // OpenRouter-style alias
     std::optional<std::vector<ToolCallDelta>> tool_calls;
 };
 struct Choice {
@@ -140,6 +142,12 @@ public:
             if (accum.has_name) {
                 turn.tool_calls.push_back({accum.id, accum.name, accum.arguments});
             }
+        }
+        // Some compat backends stream a reasoning trace alongside content; capture
+        // it for display only (chat-completions can't round-trip it back).
+        if (!reasoning_.empty()) {
+            turn.reasoning.provider = "openai-compat";
+            turn.reasoning.text = reasoning_;
         }
         return turn;
     }
@@ -198,6 +206,12 @@ private:
                     on_delta_(*delta.content);
                 }
             }
+            if (delta.reasoning_content.has_value()) {
+                reasoning_ += *delta.reasoning_content; // captured, not streamed
+            }
+            if (delta.reasoning.has_value()) {
+                reasoning_ += *delta.reasoning;
+            }
             if (delta.tool_calls.has_value()) {
                 for (const wire::ToolCallDelta& tcd : *delta.tool_calls) {
                     const std::int64_t index = tcd.index.value_or(0);
@@ -232,6 +246,7 @@ private:
     DeltaSink on_delta_;
     std::string buffer_;
     std::string text_;
+    std::string reasoning_;
     std::map<std::int64_t, Accum> calls_;
     std::string finish_reason_;
     Usage usage_;

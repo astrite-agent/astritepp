@@ -69,7 +69,11 @@ OpenAiCompatProvider::stream_chat(const schema::Value& messages, const schema::V
     if (r.status != 200) {
         return std::unexpected("HTTP " + std::to_string(r.status) + ": " + r.tail);
     }
-    return accumulator.settle();
+    CompletedTurn turn = accumulator.settle();
+    if (!turn.reasoning.empty()) {
+        turn.reasoning.model = cfg_.model;
+    }
+    return turn;
 }
 
 namespace oc_wire {

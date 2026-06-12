@@ -104,4 +104,55 @@ TEST_CASE("gpt config: reasoning models default to medium effort") {
     CHECK(llm::GptConfig::from_env_or("k", "gpt-5.2", "", "").reasoning_effort == "medium");
     CHECK(llm::GptConfig::from_env_or("k", "gpt-4o", "", "").reasoning_effort.empty());
     CHECK(llm::GptConfig::from_env_or("k", "gpt-5.2", "", "high").reasoning_effort == "high");
+    CHECK_FALSE(llm::GptConfig::from_env_or("k", "gpt-5.2", "", "").reasoning_summary); // off default
+}
+
+// ---- reasoning summary: request + capture (display only; no item round-trip yet) ----
+
+namespace {
+std::string sse(std::initializer_list<std::string> events) {
+    std::string out;
+    for (const std::string& e : events) {
+        out += "data: " + e + "\n";
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("gpt body: summary requests a reasoning summary only when reasoning is on") {
+    Value msgs = Value::list({msg("user", "hi")});
+    std::string body =
+        build_responses_body("gpt-5.2", "medium", msgs, Value::list({}), /*summary=*/true);
+    auto parsed = parse_json(body);
+    REQUIRE(parsed->get("reasoning") != nullptr);
+    CHECK(*parsed->get("reasoning")->get("summary") == Value::str("auto"));
+
+    // No reasoning block at all (no effort) => no summary either.
+    std::string body2 = build_responses_body("gpt-4o", "", msgs, Value::list({}), /*summary=*/true);
+    CHECK(parse_json(body2)->get("reasoning") == nullptr);
+}
+
+TEST_CASE("gpt fold: reasoning summary is captured separately from the visible output") {
+    std::string stream = sse({
+        R"({"type":"response.reasoning_summary_text.delta","delta":"plan: "})",
+        R"({"type":"response.reasoning_summary_text.delta","delta":"add them"})",
+        R"({"type":"response.output_text.delta","delta":"The total is 5."})",
+        R"({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}})",
+    });
+    CompletedTurn turn = fold_responses_sse(stream);
+    CHECK(turn.text == "The total is 5.");        // visible output only
+    CHECK(turn.reasoning.text == "plan: add them"); // summary captured for display
+    CHECK(turn.reasoning.provider == "gpt");
+    // Display-only: no opaque blocks are round-tripped on the Responses path yet.
+    CHECK_FALSE(turn.reasoning.blocks.has_value());
+}
+
+TEST_CASE("gpt fold: summary deltas never reach the visible delta sink") {
+    std::string streamed;
+    std::string stream = sse({
+        R"({"type":"response.reasoning_summary_text.delta","delta":"hidden"})",
+        R"({"type":"response.output_text.delta","delta":"shown"})",
+    });
+    (void)fold_responses_sse(stream, [&](std::string_view d) { streamed += d; });
+    CHECK(streamed == "shown");
 }

@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -22,12 +23,16 @@ std::expected<GptConfig, std::string> GptConfig::from_env() {
     const char* model = std::getenv("OPENAI_MODEL");
     const char* base = std::getenv("OPENAI_BASE_URL");
     const char* effort = std::getenv("OPENAI_REASONING_EFFORT");
+    const char* summary = std::getenv("OPENAI_REASONING_SUMMARY");
+    const bool want_summary = summary != nullptr && *summary != '\0' &&
+                              std::string_view(summary) != "0" &&
+                              std::string_view(summary) != "false";
     return from_env_or(key, model != nullptr ? model : "", base != nullptr ? base : "",
-                       effort != nullptr ? effort : "");
+                       effort != nullptr ? effort : "", want_summary);
 }
 
 GptConfig GptConfig::from_env_or(std::string api_key, std::string model, std::string base_url,
-                                 std::string reasoning_effort) {
+                                 std::string reasoning_effort, bool reasoning_summary) {
     GptConfig cfg;
     cfg.api_key = std::move(api_key);
     cfg.model = model.empty() ? "gpt-5.2" : std::move(model);
@@ -42,6 +47,7 @@ GptConfig GptConfig::from_env_or(std::string api_key, std::string model, std::st
         reasoning_effort = "medium";
     }
     cfg.reasoning_effort = std::move(reasoning_effort);
+    cfg.reasoning_summary = reasoning_summary;
     return cfg;
 }
 
@@ -150,7 +156,7 @@ Value to_responses_tools(const Value& tools) {
 }
 
 std::string build_responses_body(const std::string& model, const std::string& effort,
-                                 const Value& messages, const Value& tools) {
+                                 const Value& messages, const Value& tools, bool summary) {
     Value req = Value::object();
     req.set("model", Value::str(model));
     req.set("stream", Value::boolean(true));
@@ -163,6 +169,9 @@ std::string build_responses_body(const std::string& model, const std::string& ef
     if (!effort.empty()) {
         Value reasoning = Value::object();
         reasoning.set("effort", Value::str(effort));
+        if (summary) {
+            reasoning.set("summary", Value::str("auto"));
+        }
         req.set("reasoning", std::move(reasoning));
     }
     if (Value rtools = to_responses_tools(tools);
@@ -231,6 +240,13 @@ public:
                 turn.tool_calls.push_back({call.call_id, call.name, call.arguments});
             }
         }
+        // Reasoning summary is display-only on the Responses path: we capture the
+        // human-readable text but do not (yet) round-trip the opaque reasoning
+        // items, so `blocks` stays unset. Tool use is correct without them.
+        if (!reasoning_.empty()) {
+            turn.reasoning.provider = "gpt";
+            turn.reasoning.text = reasoning_;
+        }
         return turn;
     }
 
@@ -275,6 +291,8 @@ private:
             if (on_delta_) {
                 on_delta_(*ev.delta);
             }
+        } else if (type == "response.reasoning_summary_text.delta" && ev.delta.has_value()) {
+            reasoning_ += *ev.delta; // captured for display, never streamed to the human
         } else if (type == "response.output_item.added" && ev.item.has_value() &&
                    ev.item->type.value_or("") == "function_call") {
             Accum& a = call_for(ev.item->id.value_or(""));
@@ -301,6 +319,7 @@ private:
     DeltaSink on_delta_;
     std::string buffer_;
     std::string text_;
+    std::string reasoning_;
     std::string finish_;
     Usage usage_;
     std::vector<Accum> calls_;
@@ -308,13 +327,19 @@ private:
 
 } // namespace
 
+CompletedTurn fold_responses_sse(std::string_view sse, const DeltaSink& on_delta) {
+    ResponsesAccumulator acc(on_delta);
+    acc.feed(sse);
+    return acc.settle();
+}
+
 std::expected<CompletedTurn, std::string> GptProvider::stream_chat(const Value& messages,
                                                                    const Value& tools,
                                                                    DeltaSink on_delta,
                                                                    std::stop_token cancel) {
     const std::string url = cfg_.base_url + "/responses";
-    const std::string body =
-        build_responses_body(cfg_.model, cfg_.reasoning_effort, messages, tools);
+    const std::string body = build_responses_body(cfg_.model, cfg_.reasoning_effort, messages, tools,
+                                                  cfg_.reasoning_summary);
     const std::vector<std::string> headers = {
         "Content-Type: application/json",
         "Authorization: Bearer " + cfg_.api_key,
@@ -331,7 +356,11 @@ std::expected<CompletedTurn, std::string> GptProvider::stream_chat(const Value& 
     if (r.status != 200) {
         return std::unexpected("HTTP " + std::to_string(r.status) + ": " + r.tail);
     }
-    return acc.settle();
+    CompletedTurn turn = acc.settle();
+    if (!turn.reasoning.empty()) {
+        turn.reasoning.model = cfg_.model;
+    }
+    return turn;
 }
 
 namespace gpt_wire {

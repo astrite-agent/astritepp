@@ -10,6 +10,7 @@
 #include <expected>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "llm/provider.hpp"
@@ -23,11 +24,14 @@ struct GptConfig {
     std::string model;
     std::string base_url;
     std::string reasoning_effort; // "", "low", "medium", "high"
+    bool reasoning_summary = false; // request a reasoning summary to display
 
-    // Reads OPENAI_API_KEY / OPENAI_MODEL / OPENAI_BASE_URL / OPENAI_REASONING_EFFORT.
+    // Reads OPENAI_API_KEY / OPENAI_MODEL / OPENAI_BASE_URL / OPENAI_REASONING_EFFORT /
+    // OPENAI_REASONING_SUMMARY.
     [[nodiscard]] static std::expected<GptConfig, std::string> from_env();
     [[nodiscard]] static GptConfig from_env_or(std::string api_key, std::string model,
-                                               std::string base_url, std::string reasoning_effort);
+                                               std::string base_url, std::string reasoning_effort,
+                                               bool reasoning_summary = false);
 };
 
 // Pure translation (testable): chat-completions messages -> Responses `input`
@@ -37,11 +41,19 @@ struct GptConfig {
                                                std::string& instructions_out);
 // chat-completions tools -> Responses flat function tools.
 [[nodiscard]] schema::Value to_responses_tools(const schema::Value& tools);
-// Full request body. Reasoning is included only when `effort` is non-empty.
+// Full request body. Reasoning is included only when `effort` is non-empty; when
+// `summary` is also set, a reasoning summary is requested (display only — the
+// Responses reasoning items are not yet round-tripped across tool calls).
 [[nodiscard]] std::string build_responses_body(const std::string& model,
                                                const std::string& effort,
                                                const schema::Value& messages,
-                                               const schema::Value& tools);
+                                               const schema::Value& tools, bool summary = false);
+
+// Fold a complete Responses SSE byte stream into a CompletedTurn (test seam over
+// the streaming accumulator). The reasoning summary is captured into `reasoning`
+// (display text, provider "gpt") and never into `text` or `on_delta`.
+[[nodiscard]] CompletedTurn fold_responses_sse(std::string_view sse,
+                                               const DeltaSink& on_delta = {});
 
 class GptProvider : public Provider {
 public:

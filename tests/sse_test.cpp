@@ -148,6 +148,27 @@ TEST_CASE("assistant_message builds the session record: content null for pure to
     CHECK(text_msg.get("tool_calls") == nullptr);
 }
 
+TEST_CASE("openai-compat: reasoning_content is captured for display, never folded into text") {
+    std::vector<std::string> deltas;
+    StreamAccumulator acc([&](std::string_view d) { deltas.emplace_back(d); });
+    acc.feed(chunk(R"({"choices":[{"delta":{"reasoning_content":"think "},"index":0}]})"));
+    acc.feed(chunk(R"({"choices":[{"delta":{"reasoning_content":"hard"},"index":0}]})"));
+    acc.feed(chunk(R"({"choices":[{"delta":{"content":"answer"},"index":0}]})"));
+    CompletedTurn turn = acc.settle();
+    CHECK(turn.text == "answer");                       // visible text only
+    CHECK(turn.reasoning.text == "think hard");          // captured
+    CHECK(turn.reasoning.provider == "openai-compat");
+    CHECK_FALSE(turn.reasoning.blocks.has_value());      // chat-completions: display only
+    REQUIRE(deltas.size() == 1);                         // reasoning never streamed to the human
+    CHECK(deltas[0] == "answer");
+}
+
+TEST_CASE("openai-compat: the `reasoning` delta alias is also captured") {
+    StreamAccumulator acc;
+    acc.feed(chunk(R"({"choices":[{"delta":{"reasoning":"via alias"},"index":0}]})"));
+    CHECK(acc.settle().reasoning.text == "via alias");
+}
+
 TEST_CASE("assistant_message omits _reasoning when the turn carried none") {
     CompletedTurn turn;
     turn.text = "hello";
