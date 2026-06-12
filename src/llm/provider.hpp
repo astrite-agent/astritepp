@@ -24,6 +24,8 @@ public:
     [[nodiscard]] virtual std::string name() const = 0;
     // The active model id.
     [[nodiscard]] virtual std::string model() const = 0;
+    // The endpoint base URL (for display / diagnostics).
+    [[nodiscard]] virtual std::string base_url() const = 0;
 
     // Blocking: stream one assistant turn. Transport failures, non-2xx statuses,
     // and cancellation are errors; a settled turn (text/tool_calls/usage) is success.

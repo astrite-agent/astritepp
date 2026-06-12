@@ -60,9 +60,9 @@ using astrite::tui::segment_body;
 // read-only runtime info. Returned without center/clear_under — the FTXUI Modal
 // component adds those. The checkboxes themselves are real components (mouse +
 // keyboard), built in main() and bound to the preference bools.
-Element config_panel(const std::string& model, const std::string& base_url,
-                     const std::string& workspace, const std::string& policy,
-                     const std::string& session, Element fields) {
+Element config_panel(const std::string& provider, const std::string& model,
+                     const std::string& base_url, const std::string& workspace,
+                     const std::string& policy, const std::string& session, Element fields) {
     auto info = [](std::string k, std::string v) {
         return hbox({text(std::move(k)) | color(Color::GrayLight) | size(WIDTH, EQUAL, 14),
                      text(std::move(v))});
@@ -71,6 +71,7 @@ Element config_panel(const std::string& model, const std::string& base_url,
                text(" config ") | bold | color(Color::White) | bgcolor(Color::Blue),
                separator(),
                text("Runtime") | bold | color(Color::YellowLight),
+               info("provider", provider),
                info("model", model),
                info("base url", base_url),
                info("workspace", workspace),
@@ -138,8 +139,9 @@ struct UsageView {
     int context_window = 128000;
 };
 
-Element status_modal_content(const std::string& model, const std::string& workspace,
-                             const astrite::tui::Transcript& t, bool active, const UsageView& u) {
+Element status_modal_content(const std::string& provider, const std::string& model,
+                             const std::string& workspace, const astrite::tui::Transcript& t,
+                             bool active, const UsageView& u) {
     int tools = 0, turns = 0;
     for (const Segment& s : t.segments()) {
         if (s.kind == Segment::Kind::tool) {
@@ -152,6 +154,7 @@ Element status_modal_content(const std::string& model, const std::string& worksp
     // also dim the grid lines adjacent to column 0 (a style bleed onto the border).
     auto label = [](std::string s) { return text(std::move(s)) | color(Color::GrayLight); };
     std::vector<std::vector<Element>> body{
+        {label("provider"), text(provider)},
         {label("model"), text(model)},
         {label("workspace"), text(workspace)},
         {label("segments"), text(std::to_string(t.segments().size()))},
@@ -246,8 +249,11 @@ int main(int argc, char** argv) {
     }
     astrite::runtime::Runtime& runtime = **rt;
 
-    const char* env_model = std::getenv("OPENAI_MODEL");
-    const std::string model = env_model != nullptr ? env_model : "gpt-5.2";
+    // Identity comes from the *live* provider the runtime built (factory-selected),
+    // not OpenAI env vars — so the header/status/config tell the truth on every
+    // backend. (Empty only in the test path where a chat fn is injected.)
+    const std::string provider = runtime.provider_name();
+    const std::string model = runtime.model();
     const std::string workspace = std::filesystem::current_path().string();
 
     ScreenInteractive screen = ScreenInteractive::Fullscreen();
@@ -292,8 +298,7 @@ int main(int argc, char** argv) {
         return i;
     };
 
-    const char* env_base = std::getenv("OPENAI_BASE_URL");
-    const std::string base_url = env_base != nullptr ? env_base : "https://api.openai.com/v1";
+    const std::string base_url = runtime.base_url();
     const char* env_policy = std::getenv("ASTRITE_AUTHORITY_POLICY");
     const std::string policy = env_policy != nullptr ? env_policy : "review";
     const std::string session_path = ".astrite/sessions/current.jsonl";
@@ -538,7 +543,7 @@ int main(int argc, char** argv) {
         }
         Element header = hbox({
             text(" astrite++ ") | bold | bgcolor(Color::Blue) | color(Color::White),
-            text("  " + model + "  ") | color(Color::GrayLight),
+            text("  " + provider + " · " + model + "  ") | color(Color::GrayLight),
             text("· " + workspace + " ") | dim,
             filler(),
             ctx_indicator,
@@ -610,7 +615,7 @@ int main(int argc, char** argv) {
             case at::Modal::status: {
                 title = "status";
                 content = status_modal_content(
-                    model, workspace, transcript, active,
+                    provider, model, workspace, transcript, active,
                     UsageView{usage.prompt, usage.completion, usage.total, usage.cache_read,
                               usage.cache_write, usage.present, &usage.history, context_window});
                 break;
@@ -906,7 +911,7 @@ int main(int argc, char** argv) {
     Component config_fields = Container::Vertical(
         {cb_markdown, cb_index, cb_collapse_tools, cb_collapse_reasoning, cb_show_reasoning});
     Component config_panel_view = Renderer(config_fields, [&] {
-        return config_panel(model, base_url, workspace, policy, session_path,
+        return config_panel(provider, model, base_url, workspace, policy, session_path,
                             config_fields->Render());
     });
     Component config_modal = CatchEvent(config_panel_view, [&](Event e) {

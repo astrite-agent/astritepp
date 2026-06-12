@@ -69,6 +69,7 @@ public:
 
     [[nodiscard]] std::string name() const override { return "gpt"; }
     [[nodiscard]] std::string model() const override { return cfg_.model; }
+    [[nodiscard]] std::string base_url() const override { return cfg_.base_url; }
 
     [[nodiscard]] std::expected<CompletedTurn, std::string>
     stream_chat(const schema::Value& messages, const schema::Value& tools, DeltaSink on_delta,

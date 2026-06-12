@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
 #include <optional>
@@ -365,6 +366,32 @@ size_t count_of(const std::vector<runtime::Event>& events) {
 }
 
 } // namespace
+
+TEST_CASE("runtime: surfaces the real provider name/model/base_url, not OpenAI env defaults") {
+    fs::path file = temp_session();
+    ::setenv("ASTRITE_PROVIDER", "anthropic", 1);
+    ::setenv("ANTHROPIC_API_KEY", "test-key", 1);
+    ::unsetenv("ANTHROPIC_MODEL");
+    ::unsetenv("ANTHROPIC_BASE_URL");
+    runtime::Options opts = test_options(file, {}); // no injected chat => build from env
+    auto rt = runtime::Runtime::create(std::move(opts));
+    ::unsetenv("ASTRITE_PROVIDER"); // clean env before asserting (robust to assert failure)
+    ::unsetenv("ANTHROPIC_API_KEY");
+    REQUIRE(rt.has_value());
+    CHECK((*rt)->provider_name() == "anthropic");
+    CHECK((*rt)->model() == "claude-haiku-4-5-20251001");
+    CHECK((*rt)->base_url() == "https://api.anthropic.com/v1");
+}
+
+TEST_CASE("runtime: provider accessors are empty when chat is injected (no live provider)") {
+    fs::path file = temp_session();
+    ScriptedChat chat;
+    auto rt = runtime::Runtime::create(test_options(file, chat.fn()));
+    REQUIRE(rt.has_value());
+    CHECK((*rt)->provider_name().empty());
+    CHECK((*rt)->model().empty());
+    CHECK((*rt)->base_url().empty());
+}
 
 TEST_CASE("a turn's reasoning surfaces as a ReasoningSettled event, after the answer") {
     fs::path file = temp_session();

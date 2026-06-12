@@ -54,6 +54,18 @@ public:
         return provider_ ? provider_->context_limit(provider_->model()) : 0;
     }
 
+    // The live backend's identity, for truthful display. Empty when a chat fn was
+    // injected (tests) rather than a provider built from the environment.
+    [[nodiscard]] std::string provider_name() const {
+        return provider_ ? provider_->name() : std::string();
+    }
+    [[nodiscard]] std::string model() const {
+        return provider_ ? provider_->model() : std::string();
+    }
+    [[nodiscard]] std::string base_url() const {
+        return provider_ ? provider_->base_url() : std::string();
+    }
+
     // ---- consent: the human side of self-modification (B4). These are the ONLY
     // way a model-authored component becomes active. The model stages a proposal
     // (component.propose); a human reviews and accepts it here, which is what
