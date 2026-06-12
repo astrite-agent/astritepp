@@ -13,6 +13,14 @@
 
 namespace astrite::llm {
 
+// Build a provider by explicit kind ("openai-compat"|"openai"|"gpt"|"codex"|
+// "responses"|"anthropic"|"claude"); an empty kind resolves from the environment
+// (ASTRITE_PROVIDER, or inference). Keys/base URLs always come from the
+// environment; a non-empty `model` overrides the provider's env/default model.
+// Errors: unknown kind, or a missing key for the chosen backend.
+[[nodiscard]] std::expected<std::shared_ptr<Provider>, std::string>
+make_named_provider(const std::string& kind, const std::string& model);
+
 [[nodiscard]] std::expected<std::shared_ptr<Provider>, std::string> make_provider_from_env();
 
 } // namespace astrite::llm

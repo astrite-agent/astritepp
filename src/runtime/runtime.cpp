@@ -41,6 +41,14 @@ struct EventObserver : kernel::EvalObserver {
     }
 };
 
+// Wrap a provider as the runtime's ChatFn (shared by create() and set_provider()).
+ChatFn chat_from(std::shared_ptr<llm::Provider> p) {
+    return [p](const Value& messages, const Value& tools,
+               llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
+        return p->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
+    };
+}
+
 } // namespace
 
 Runtime::Runtime(Options opts)
@@ -55,18 +63,16 @@ std::expected<std::unique_ptr<Runtime>, std::string> Runtime::create(Options opt
         std::error_code ec;
         opts.workspace_root = std::filesystem::current_path(ec);
     }
-    std::shared_ptr<llm::Provider> built_provider;
+    std::shared_ptr<llm::Provider> built_provider = opts.provider;
     if (!opts.chat) {
-        auto provider = llm::make_provider_from_env();
-        if (!provider.has_value()) {
-            return std::unexpected("runtime: " + provider.error());
+        if (!built_provider) {
+            auto provider = llm::make_provider_from_env();
+            if (!provider.has_value()) {
+                return std::unexpected("runtime: " + provider.error());
+            }
+            built_provider = std::move(*provider);
         }
-        built_provider = std::move(*provider);
-        std::shared_ptr<llm::Provider> p = built_provider;
-        opts.chat = [p](const Value& messages, const Value& tools,
-                        llm::StreamAccumulator::DeltaSink on_delta, std::stop_token cancel) {
-            return p->stream_chat(messages, tools, std::move(on_delta), std::move(cancel));
-        };
+        opts.chat = chat_from(built_provider);
     }
 
     auto runtime = std::unique_ptr<Runtime>(new Runtime(std::move(opts)));
@@ -553,6 +559,15 @@ Runtime::accept_proposal(const std::string& name) {
 
 bool Runtime::reject_proposal(const std::string& name) {
     return discard_proposal(opts_.workspace_root, name);
+}
+
+void Runtime::set_provider(std::shared_ptr<llm::Provider> provider) {
+    std::lock_guard turn_lock(turn_mu_); // never swap mid-turn; the next turn picks it up
+    if (!provider) {
+        return;
+    }
+    provider_ = std::move(provider);
+    opts_.chat = chat_from(provider_); // the llm.stream effect calls opts_.chat
 }
 
 bool Runtime::submit_user_message(const std::string& text, std::stop_token cancel) {

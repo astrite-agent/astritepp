@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "embedded_components.hpp"
+#include "llm/provider_factory.hpp"
 #include "runtime/fs_read_args.hpp"
 #include "runtime/proposals.hpp"
 #include "runtime/runtime.hpp"
@@ -381,6 +382,39 @@ TEST_CASE("runtime: surfaces the real provider name/model/base_url, not OpenAI e
     CHECK((*rt)->provider_name() == "anthropic");
     CHECK((*rt)->model() == "claude-haiku-4-5-20251001");
     CHECK((*rt)->base_url() == "https://api.anthropic.com/v1");
+}
+
+TEST_CASE("runtime: set_provider swaps the live backend identity") {
+    fs::path file = temp_session();
+    ::setenv("ASTRITE_PROVIDER", "anthropic", 1);
+    ::setenv("ANTHROPIC_API_KEY", "k", 1);
+    ::setenv("OPENAI_API_KEY", "k", 1);
+    runtime::Options opts = test_options(file, {}); // build from env => anthropic
+    auto rt = runtime::Runtime::create(std::move(opts));
+    auto gpt = llm::make_named_provider("gpt", "gpt-5.2");
+    ::unsetenv("ASTRITE_PROVIDER");
+    ::unsetenv("ANTHROPIC_API_KEY");
+    ::unsetenv("OPENAI_API_KEY");
+    REQUIRE(rt.has_value());
+    REQUIRE(gpt.has_value());
+    CHECK((*rt)->provider_name() == "anthropic");
+    (*rt)->set_provider(*gpt);
+    CHECK((*rt)->provider_name() == "gpt");      // identity swapped live
+    CHECK((*rt)->model() == "gpt-5.2");
+}
+
+TEST_CASE("runtime: create prefers an injected provider over the env factory") {
+    fs::path file = temp_session();
+    ::setenv("OPENAI_API_KEY", "k", 1);
+    auto p = llm::make_named_provider("gpt", "gpt-5.2");
+    ::unsetenv("OPENAI_API_KEY");
+    REQUIRE(p.has_value());
+    runtime::Options opts = test_options(file, {}); // no chat, no env selection
+    opts.provider = *p;
+    auto rt = runtime::Runtime::create(std::move(opts));
+    REQUIRE(rt.has_value());
+    CHECK((*rt)->provider_name() == "gpt"); // used the injected provider
+    CHECK((*rt)->model() == "gpt-5.2");
 }
 
 TEST_CASE("runtime: provider accessors are empty when chat is injected (no live provider)") {

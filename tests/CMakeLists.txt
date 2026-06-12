@@ -30,6 +30,7 @@ add_executable(astrite_tests
     tui_component_test.cpp
     tui_io_test.cpp
     config_test.cpp
+    provider_factory_test.cpp
 )
 target_link_libraries(astrite_tests PRIVATE doctest astrite_core astrite_llm astrite_runtime
     astrite_sandbox ftxui::component ftxui::dom ftxui::screen)

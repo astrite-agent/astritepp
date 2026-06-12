@@ -34,7 +34,8 @@ struct Options {
     std::filesystem::path workspace_root; // absolute fs base; empty → current_path()
     std::string system_prompt;
     kernel::ComponentMap components; // must contain the agent component `turn`
-    ChatFn chat;                     // empty → built from env (OPENAI_API_KEY…)
+    ChatFn chat;                     // empty → built from `provider` or env
+    std::shared_ptr<llm::Provider> provider; // pre-built backend; null → env factory
 };
 
 class Runtime {
@@ -89,6 +90,12 @@ public:
 
     // Discard a staged proposal without installing it.
     bool reject_proposal(const std::string& name);
+
+    // Swap the live model backend (in-session model/provider switching). Takes the
+    // turn lock, so it can't race an in-flight turn; the next turn uses the new
+    // backend. The conversation (message log) is provider-neutral and continues
+    // unbroken; stale reasoning sidecars auto-drop on the model mismatch.
+    void set_provider(std::shared_ptr<llm::Provider> provider);
 
 private:
     explicit Runtime(Options opts);
