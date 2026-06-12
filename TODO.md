@@ -166,14 +166,16 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
         tool_use). Live-verified: clean answer + captured trace, and a two-turn conversation
         round-trips a valid signed thinking block.
       - **GPT/Responses**: `OPENAI_REASONING_SUMMARY` requests `reasoning.summary=auto`; the
-        summary is captured for display (no item round-trip yet — tool use is correct without it).
+        summary is captured for display, and the reasoning **items round-trip across tool calls**
+        — fully stateless (`store:false` + `include:[reasoning.encrypted_content]`), capturing each
+        item verbatim from `output_item.done` and re-emitting it (id + summary + encrypted_content)
+        *before* its function_call, model-gated. Live-verified through a 3-turn agent tool loop.
       - **openai-compat**: captures `reasoning_content`/`reasoning` deltas (display only).
       Reasoning is never streamed to the visible delta sink. UI: `Segment::Kind::reasoning`
       (dim/magenta 🧠, collapsible), a `ReasoningSettled` event emitted after the answer, and
       persisted/restored via `transcript_io`. Config: `UiConfig` (`.astrite/config.json`) adds
       `collapse_tool_calls` / `collapse_reasoning` (both default-collapse) and `show_reasoning`
       (the per-provider master enable). Live-verified end to end through `astrite-tui`.
-- [ ] GPT/Responses reasoning-item round-trip across tool calls (encrypted_content / item refs).
 - [ ] Fuzz target: SSE/tool-call accumulator.
 
 ## M5 — Runtime (`src/runtime/`)

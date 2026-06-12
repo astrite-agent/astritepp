@@ -69,7 +69,8 @@ Value message_item(const std::string& role, const std::string& part_type, const 
 }
 } // namespace
 
-Value to_responses_input(const Value& messages, std::string& instructions_out) {
+Value to_responses_input(const Value& messages, std::string& instructions_out,
+                         const std::string& model, bool reasoning) {
     Value::List out;
     const Value::List* list = messages.as_list();
     if (list == nullptr) {
@@ -103,6 +104,23 @@ Value to_responses_input(const Value& messages, std::string& instructions_out) {
                                            ? *str_of(msg.get("content"))
                                            : ""));
         } else if (*role == "assistant") {
+            // Reasoning round-trip: re-emit this turn's opaque reasoning items
+            // FIRST, but only when reasoning is on and the sidecar was produced by
+            // gpt on this same model. Otherwise drop it (the encrypted items are
+            // model-specific and useless — or rejected — elsewhere).
+            if (reasoning) {
+                if (const Value* r = msg.get("_reasoning")) {
+                    const std::string* rp = str_of(r->get("provider"));
+                    const std::string* rm = str_of(r->get("model"));
+                    if (rp != nullptr && *rp == "gpt" && rm != nullptr && *rm == model) {
+                        if (const Value* b = r->get("blocks"); b != nullptr && b->as_list()) {
+                            for (const Value& item : *b->as_list()) {
+                                out.push_back(item);
+                            }
+                        }
+                    }
+                }
+            }
             if (const std::string* c = str_of(msg.get("content")); c != nullptr && !c->empty()) {
                 out.push_back(message_item("assistant", "output_text", *c));
             }
@@ -157,12 +175,18 @@ Value to_responses_tools(const Value& tools) {
 
 std::string build_responses_body(const std::string& model, const std::string& effort,
                                  const Value& messages, const Value& tools, bool summary) {
+    // Reasoning is active (capture + round-trip) only when an effort is set AND the
+    // caller asked to surface reasoning. In that mode we go fully stateless —
+    // store:false + include encrypted_content — and round-trip the reasoning items
+    // through to_responses_input (the API rejects a store:false reasoning item that
+    // lacks its encrypted_content).
+    const bool reasoning_active = summary && !effort.empty();
     Value req = Value::object();
     req.set("model", Value::str(model));
     req.set("stream", Value::boolean(true));
 
     std::string instructions;
-    req.set("input", to_responses_input(messages, instructions));
+    req.set("input", to_responses_input(messages, instructions, model, reasoning_active));
     if (!instructions.empty()) {
         req.set("instructions", Value::str(instructions));
     }
@@ -173,6 +197,10 @@ std::string build_responses_body(const std::string& model, const std::string& ef
             reasoning.set("summary", Value::str("auto"));
         }
         req.set("reasoning", std::move(reasoning));
+    }
+    if (reasoning_active) {
+        req.set("store", Value::boolean(false));
+        req.set("include", Value::list({Value::str("reasoning.encrypted_content")}));
     }
     if (Value rtools = to_responses_tools(tools);
         rtools.as_list() != nullptr && !rtools.as_list()->empty()) {
@@ -240,12 +268,32 @@ public:
                 turn.tool_calls.push_back({call.call_id, call.name, call.arguments});
             }
         }
-        // Reasoning summary is display-only on the Responses path: we capture the
-        // human-readable text but do not (yet) round-trip the opaque reasoning
-        // items, so `blocks` stays unset. Tool use is correct without them.
-        if (!reasoning_.empty()) {
+        // Reasoning: the summary deltas are the display text; the reasoning *items*
+        // (id + summary + encrypted_content, captured verbatim from output_item.done)
+        // are the round-trip payload. Display text falls back to the item summaries
+        // when no summary deltas streamed.
+        const bool has_items = !reasoning_items_.empty();
+        if (!reasoning_.empty() || has_items) {
             turn.reasoning.provider = "gpt";
-            turn.reasoning.text = reasoning_;
+            std::string trace = reasoning_;
+            if (trace.empty() && has_items) {
+                for (const Value& it : reasoning_items_) {
+                    const Value* s = it.get("summary");
+                    if (s == nullptr || s->as_list() == nullptr) {
+                        continue;
+                    }
+                    for (const Value& part : *s->as_list()) {
+                        if (const std::string* txt = str_of(part.get("text"))) {
+                            trace += *txt;
+                        }
+                    }
+                }
+            }
+            turn.reasoning.text = std::move(trace);
+            if (has_items) {
+                turn.reasoning.blocks =
+                    Value::list(Value::List(reasoning_items_.begin(), reasoning_items_.end()));
+            }
         }
         return turn;
     }
@@ -282,6 +330,38 @@ private:
             return;
         }
         apply(ev);
+        // The reasoning item (with encrypted_content) arrives complete on
+        // output_item.done; capture it verbatim from the raw payload — the typed
+        // wire struct can't hold the opaque summary/encrypted blob.
+        if (ev.type.value_or("") == "response.output_item.done" && ev.item.has_value() &&
+            ev.item->type.value_or("") == "reasoning") {
+            capture_reasoning_item(payload);
+        }
+    }
+
+    void capture_reasoning_item(std::string_view payload) {
+        auto parsed = schema::parse_json(std::string(payload));
+        if (!parsed.has_value()) {
+            return;
+        }
+        const Value* item = parsed->get("item");
+        if (item == nullptr) {
+            return;
+        }
+        // Keep exactly what the API requires back on input: type, id, summary,
+        // encrypted_content. Drop `content` (not accepted as input).
+        Value block = Value::object();
+        block.set("type", Value::str("reasoning"));
+        if (const Value* id = item->get("id")) {
+            block.set("id", *id);
+        }
+        if (const Value* s = item->get("summary")) {
+            block.set("summary", *s);
+        }
+        if (const Value* e = item->get("encrypted_content")) {
+            block.set("encrypted_content", *e);
+        }
+        reasoning_items_.push_back(std::move(block));
     }
 
     void apply(const gpt_wire::Event& ev) {
@@ -320,6 +400,7 @@ private:
     std::string buffer_;
     std::string text_;
     std::string reasoning_;
+    std::vector<Value> reasoning_items_; // verbatim {type,id,summary,encrypted_content}
     std::string finish_;
     Usage usage_;
     std::vector<Accum> calls_;

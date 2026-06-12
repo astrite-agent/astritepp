@@ -107,7 +107,7 @@ TEST_CASE("gpt config: reasoning models default to medium effort") {
     CHECK_FALSE(llm::GptConfig::from_env_or("k", "gpt-5.2", "", "").reasoning_summary); // off default
 }
 
-// ---- reasoning summary: request + capture (display only; no item round-trip yet) ----
+// ---- reasoning: request, capture (summary for display + items for round-trip) ----
 
 namespace {
 std::string sse(std::initializer_list<std::string> events) {
@@ -116,6 +116,37 @@ std::string sse(std::initializer_list<std::string> events) {
         out += "data: " + e + "\n";
     }
     return out;
+}
+
+// An assistant tool-call turn carrying a captured Responses reasoning item.
+Value gpt_asst_with_reasoning(const std::string& model) {
+    Value st = Value::object();
+    st.set("type", Value::str("summary_text"));
+    st.set("text", Value::str("weigh it"));
+    Value b = Value::object();
+    b.set("type", Value::str("reasoning"));
+    b.set("id", Value::str("rs_1"));
+    b.set("summary", Value::list({std::move(st)}));
+    b.set("encrypted_content", Value::str("ENC=="));
+    Value reasoning = Value::object();
+    reasoning.set("provider", Value::str("gpt"));
+    reasoning.set("model", Value::str(model));
+    reasoning.set("blocks", Value::list({std::move(b)}));
+
+    Value fn = Value::object();
+    fn.set("name", Value::str("get_weather"));
+    fn.set("arguments", Value::str(R"({"city":"Paris"})"));
+    Value tc = Value::object();
+    tc.set("id", Value::str("call_1"));
+    tc.set("type", Value::str("function"));
+    tc.set("function", std::move(fn));
+
+    Value asst = Value::object();
+    asst.set("role", Value::str("assistant"));
+    asst.set("content", Value());
+    asst.set("tool_calls", Value::list({std::move(tc)}));
+    asst.set("_reasoning", std::move(reasoning));
+    return asst;
 }
 } // namespace
 
@@ -143,8 +174,81 @@ TEST_CASE("gpt fold: reasoning summary is captured separately from the visible o
     CHECK(turn.text == "The total is 5.");        // visible output only
     CHECK(turn.reasoning.text == "plan: add them"); // summary captured for display
     CHECK(turn.reasoning.provider == "gpt");
-    // Display-only: no opaque blocks are round-tripped on the Responses path yet.
+    // Summary deltas alone (no reasoning *item*) carry no round-trip payload.
     CHECK_FALSE(turn.reasoning.blocks.has_value());
+}
+
+TEST_CASE("gpt fold: a reasoning item is captured verbatim for round-trip") {
+    std::string stream = sse({
+        R"({"type":"response.output_item.added","item":{"type":"reasoning","id":"rs_1"}})",
+        R"({"type":"response.output_item.done","item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"weigh it"}],"encrypted_content":"ENC==","content":[]}})",
+        R"({"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"get_weather"}})",
+        R"({"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"city\":\"Paris\"}"})",
+        R"({"type":"response.completed","response":{"usage":{"input_tokens":5,"output_tokens":6,"total_tokens":11}}})",
+    });
+    CompletedTurn turn = fold_responses_sse(stream);
+    REQUIRE(turn.tool_calls.size() == 1);
+    CHECK(turn.reasoning.provider == "gpt");
+    CHECK(turn.reasoning.text == "weigh it"); // display text falls back to the item summary
+    REQUIRE(turn.reasoning.blocks.has_value());
+    const auto* blks = turn.reasoning.blocks->as_list();
+    REQUIRE(blks != nullptr);
+    REQUIRE(blks->size() == 1);
+    const Value& b = (*blks)[0];
+    CHECK(*b.get("type") == Value::str("reasoning"));
+    CHECK(*b.get("id") == Value::str("rs_1"));
+    CHECK(*b.get("encrypted_content") == Value::str("ENC==")); // the carrier, verbatim
+    REQUIRE(b.get("summary") != nullptr);                       // required when echoed back
+    REQUIRE(b.get("summary")->as_list() != nullptr);
+    CHECK(b.get("content") == nullptr); // dropped: not needed and not accepted on input
+}
+
+TEST_CASE("gpt body: reasoning round-trip goes stateless (store:false + encrypted_content)") {
+    Value msgs = Value::list({msg("user", "hi")});
+    std::string body =
+        build_responses_body("gpt-5.2", "medium", msgs, Value::list({}), /*summary=*/true);
+    auto parsed = parse_json(body);
+    REQUIRE(parsed.has_value());
+    CHECK(*parsed->get("store") == Value::boolean(false));
+    REQUIRE(parsed->get("include") != nullptr);
+    REQUIRE(parsed->get("include")->as_list() != nullptr);
+    CHECK((*parsed->get("include")->as_list())[0] == Value::str("reasoning.encrypted_content"));
+
+    // Reasoning off => no stateless override (today's behavior preserved).
+    std::string body2 =
+        build_responses_body("gpt-5.2", "medium", msgs, Value::list({}), /*summary=*/false);
+    auto parsed2 = parse_json(body2);
+    CHECK(parsed2->get("store") == nullptr);
+    CHECK(parsed2->get("include") == nullptr);
+}
+
+TEST_CASE("gpt round-trip: the reasoning item leads the assistant items on the same model") {
+    std::string instr;
+    Value out = to_responses_input(Value::list({gpt_asst_with_reasoning("gpt-5.2")}), instr,
+                                   /*model=*/"gpt-5.2", /*reasoning=*/true);
+    const Value::List& items = *out.as_list();
+    REQUIRE(items.size() == 2);
+    CHECK(*items[0].get("type") == Value::str("reasoning")); // reasoning FIRST
+    CHECK(*items[0].get("id") == Value::str("rs_1"));
+    CHECK(*items[0].get("encrypted_content") == Value::str("ENC=="));
+    CHECK(*items[1].get("type") == Value::str("function_call")); // then the call
+}
+
+TEST_CASE("gpt round-trip: a model switch drops the reasoning item") {
+    std::string instr;
+    Value out = to_responses_input(Value::list({gpt_asst_with_reasoning("gpt-5.2")}), instr,
+                                   /*model=*/"gpt-4o", /*reasoning=*/true);
+    const Value::List& items = *out.as_list();
+    REQUIRE(items.size() == 1);
+    CHECK(*items[0].get("type") == Value::str("function_call")); // dropped — other model
+}
+
+TEST_CASE("gpt round-trip: disabled reasoning drops the item even on the same model") {
+    std::string instr;
+    Value out = to_responses_input(Value::list({gpt_asst_with_reasoning("gpt-5.2")}), instr,
+                                   /*model=*/"gpt-5.2", /*reasoning=*/false);
+    REQUIRE(out.as_list()->size() == 1);
+    CHECK(*(*out.as_list())[0].get("type") == Value::str("function_call"));
 }
 
 TEST_CASE("gpt fold: summary deltas never reach the visible delta sink") {

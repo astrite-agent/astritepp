@@ -675,8 +675,9 @@ hash-pinned user-level trust record.
   continues** (a model switch drops it — exactly the API's own contract). This is correctness, not
   preference: Anthropic extended thinking with tool use *requires* the `thinking` block to lead the
   assistant turn, so `to_anthropic_messages` re-emits it first (gated on `ANTHROPIC_THINKING_BUDGET`).
-  GPT/Responses captures the reasoning summary for display (full item round-trip across tool calls
-  is a later slice); openai-compat captures `reasoning_content` for display. The UI shows reasoning
+  GPT/Responses does the same statelessly: `store:false` + `include:[reasoning.encrypted_content]`,
+  capturing each reasoning item verbatim and re-emitting it (with its `encrypted_content`) before
+  the function_call it produced. openai-compat captures `reasoning_content` for display only. The UI shows reasoning
   as its own dim, collapsible `reasoning` segment (collapsed by default, with tool calls, via
   `UiConfig`); it never streams into the visible token sink.
 - **Cross-turn state is event-sourced** in the JSONL session log and reseeded each turn; the

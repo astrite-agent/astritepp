@@ -37,8 +37,16 @@ struct GptConfig {
 // Pure translation (testable): chat-completions messages -> Responses `input`
 // items, with system text pulled into `instructions_out`, assistant tool_calls
 // -> function_call items, and tool results -> function_call_output items.
+//
+// Reasoning round-trip: when `reasoning` is on and an assistant message carries a
+// `_reasoning` sidecar produced by gpt on this same `model`, its opaque reasoning
+// items are re-emitted *first* in that turn (the Responses API requires the
+// reasoning item to precede the function_call it produced). A model switch or
+// disabled reasoning drops them — the encrypted items are useless to another model.
 [[nodiscard]] schema::Value to_responses_input(const schema::Value& messages,
-                                               std::string& instructions_out);
+                                               std::string& instructions_out,
+                                               const std::string& model = "",
+                                               bool reasoning = false);
 // chat-completions tools -> Responses flat function tools.
 [[nodiscard]] schema::Value to_responses_tools(const schema::Value& tools);
 // Full request body. Reasoning is included only when `effort` is non-empty; when
