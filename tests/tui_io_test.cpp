@@ -86,6 +86,18 @@ TEST_CASE("transcript io: a proposal's resolution survives a round-trip") {
     fs::remove(path);
 }
 
+TEST_CASE("transcript io: a reasoning segment round-trips") {
+    Transcript t;
+    t.apply(astrite::runtime::ReasoningSettled{"considered three options"});
+    fs::path path = tmp("reasoning");
+    REQUIRE(save_transcript(path, t.segments()));
+    std::vector<Segment> loaded = load_transcript(path);
+    REQUIRE(loaded.size() == 1);
+    CHECK(loaded[0].kind == Segment::Kind::reasoning);
+    CHECK(loaded[0].text == "considered three options");
+    fs::remove(path);
+}
+
 TEST_CASE("transcript io: a missing file restores nothing") {
     CHECK(load_transcript(fs::temp_directory_path() / "astrite_no_such_transcript.jsonl").empty());
 }

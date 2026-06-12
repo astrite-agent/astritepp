@@ -15,7 +15,7 @@
 namespace astrite::tui {
 
 struct Segment {
-    enum class Kind { user, assistant, tool, error, proposal, notice };
+    enum class Kind { user, assistant, reasoning, tool, error, proposal, notice };
     Kind kind = Kind::user;
     std::string text;        // user input / accumulated assistant text / error message
     std::string tool_name;   // tool segments only
@@ -63,6 +63,16 @@ public:
                         seg.done = true;
                         segments_.push_back(std::move(seg));
                     } // empty settle (pure tool-call turn): nothing to show
+                },
+                [&](const runtime::ReasoningSettled& r) {
+                    if (r.text.empty()) {
+                        return; // nothing to show
+                    }
+                    Segment seg;
+                    seg.kind = Segment::Kind::reasoning;
+                    seg.text = r.text;
+                    seg.done = true;
+                    segments_.push_back(std::move(seg));
                 },
                 [&](const runtime::ToolStarted& t) {
                     Segment seg;

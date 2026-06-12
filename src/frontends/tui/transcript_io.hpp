@@ -38,6 +38,8 @@ struct SegmentWire {
         return "user";
     case Segment::Kind::assistant:
         return "assistant";
+    case Segment::Kind::reasoning:
+        return "reasoning";
     case Segment::Kind::tool:
         return "tool";
     case Segment::Kind::error:
@@ -53,6 +55,7 @@ struct SegmentWire {
 [[nodiscard]] inline std::optional<Segment::Kind> kind_of(std::string_view s) {
     if (s == "user") return Segment::Kind::user;
     if (s == "assistant") return Segment::Kind::assistant;
+    if (s == "reasoning") return Segment::Kind::reasoning;
     if (s == "tool") return Segment::Kind::tool;
     if (s == "error") return Segment::Kind::error;
     if (s == "proposal") return Segment::Kind::proposal;

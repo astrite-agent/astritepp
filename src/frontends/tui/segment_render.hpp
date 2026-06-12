@@ -56,6 +56,22 @@ inline ftxui::Element segment_body(const Segment& s, bool collapsed, bool markdo
             return paragraph(s.text + " ▌");
         }
         return markdown ? render_markdown(s.text) : paragraph(s.text);
+    case Segment::Kind::reasoning: {
+        // The model's thinking trace — dim, visually quieter than the answer, and
+        // collapsible (collapsed by default via config). Never markdown: it's a
+        // raw trace, not authored prose.
+        std::string head = std::string(collapsed ? "▸ " : "▾ ") + "🧠 reasoning";
+        if (collapsed) {
+            std::string peek = first_line(s.text);
+            if (!peek.empty()) {
+                head += " · " + peek;
+            }
+            return text(head + " …") | dim | color(Color::Magenta);
+        }
+        return vbox({text(head) | color(Color::Magenta),
+                     paragraph(clip_lines(s.text, 24)) | dim}) |
+               borderLight | color(Color::GrayDark);
+    }
     case Segment::Kind::tool: {
         std::string head = std::string(collapsed ? "▸ " : "▾ ") + "⚙ " + s.tool_name;
         if (!s.tool_args.empty() && s.tool_args != "{}") {

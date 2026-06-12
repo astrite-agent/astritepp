@@ -111,6 +111,14 @@ int main(int argc, char** argv) {
                         return false;
                     },
                     [&](const runtime::AssistantSettled&) { return false; },
+                    [&](const runtime::ReasoningSettled& r) {
+                        if (mid_stream) {
+                            std::fputc('\n', stdout);
+                            mid_stream = false;
+                        }
+                        std::printf("[reasoning %s]\n", r.text.c_str());
+                        return false;
+                    },
                     [&](const runtime::ToolStarted& t) {
                         if (mid_stream) {
                             std::fputc('\n', stdout);

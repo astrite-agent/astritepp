@@ -366,6 +366,48 @@ size_t count_of(const std::vector<runtime::Event>& events) {
 
 } // namespace
 
+TEST_CASE("a turn's reasoning surfaces as a ReasoningSettled event, after the answer") {
+    fs::path file = temp_session();
+    ScriptedChat chat;
+    llm::CompletedTurn turn;
+    turn.text = "42";
+    turn.finish_reason = "stop";
+    turn.reasoning.provider = "anthropic";
+    turn.reasoning.model = "claude-haiku-4-5";
+    turn.reasoning.text = "I worked through it";
+    chat.script.push_back(turn);
+
+    auto rt = runtime::Runtime::create(test_options(file, chat.fn()));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("q"));
+    auto events = drain(**rt);
+
+    REQUIRE(count_of<runtime::ReasoningSettled>(events) == 1);
+    int assistant_at = -1, reasoning_at = -1;
+    for (int i = 0; i < static_cast<int>(events.size()); ++i) {
+        if (std::holds_alternative<runtime::AssistantSettled>(events[static_cast<size_t>(i)])) {
+            assistant_at = i;
+        }
+        if (const auto* r = std::get_if<runtime::ReasoningSettled>(&events[static_cast<size_t>(i)])) {
+            reasoning_at = i;
+            CHECK(r->text == "I worked through it");
+        }
+    }
+    CHECK(assistant_at >= 0);
+    CHECK(reasoning_at > assistant_at); // reasoning settles after the assistant answer
+}
+
+TEST_CASE("a turn with no reasoning emits no ReasoningSettled event") {
+    fs::path file = temp_session();
+    ScriptedChat chat;
+    chat.script.push_back({"plain answer", {}, "stop", {}});
+    auto rt = runtime::Runtime::create(test_options(file, chat.fn()));
+    REQUIRE(rt.has_value());
+    REQUIRE((*rt)->submit_user_message("q"));
+    auto events = drain(**rt);
+    CHECK(count_of<runtime::ReasoningSettled>(events) == 0);
+}
+
 TEST_CASE("a full turn: tool dispatch loops back through the session, then settles") {
     fs::path file = temp_session();
     ScriptedChat chat;

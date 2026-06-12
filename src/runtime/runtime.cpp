@@ -433,6 +433,11 @@ void Runtime::register_effects() {
                                           turn->usage.completion_tokens, turn->usage.total_tokens,
                                           turn->usage.present, turn->usage.cache_read_tokens,
                                           turn->usage.cache_write_tokens});
+            // The reasoning trace settles after the answer (display only — the
+            // round-trip copy is in the message log's _reasoning sidecar).
+            if (!turn->reasoning.text.empty()) {
+                events_.push(ReasoningSettled{turn->reasoning.text});
+            }
 
             Value::List calls;
             calls.reserve(turn->tool_calls.size());

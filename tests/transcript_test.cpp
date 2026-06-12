@@ -34,6 +34,26 @@ TEST_CASE("assistant deltas accumulate into one segment; settled marks it done")
     CHECK(t.segments()[0].done);
 }
 
+TEST_CASE("reasoning settles into its own segment, distinct from the assistant text") {
+    Transcript t;
+    t.apply(rt::Started{});
+    t.apply(rt::AssistantDelta{"The answer is 42."});
+    t.apply(rt::AssistantSettled{"The answer is 42."});
+    t.apply(rt::ReasoningSettled{"first I considered the options"});
+    REQUIRE(t.segments().size() == 2);
+    CHECK(t.segments()[0].kind == Segment::Kind::assistant);
+    CHECK(t.segments()[0].text == "The answer is 42."); // visible text unchanged
+    CHECK(t.segments()[1].kind == Segment::Kind::reasoning);
+    CHECK(t.segments()[1].text == "first I considered the options");
+    CHECK(t.segments()[1].done);
+}
+
+TEST_CASE("empty reasoning settles to nothing") {
+    Transcript t;
+    t.apply(rt::ReasoningSettled{""});
+    CHECK(t.segments().empty());
+}
+
 TEST_CASE("a settled turn with no deltas still surfaces its text once") {
     Transcript t;
     t.apply(rt::AssistantSettled{"scripted answer"});

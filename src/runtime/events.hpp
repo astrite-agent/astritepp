@@ -28,6 +28,12 @@ struct AssistantSettled {
     int cache_read_tokens = 0;  // prompt tokens served from cache (trailing: keeps 5-arg init)
     int cache_write_tokens = 0; // prompt tokens written to cache this call
 };
+// A turn's reasoning/thinking trace, settled at end of turn (never streamed into
+// the visible text). Empty traces are not emitted. Display-only — the round-trip
+// copy lives in the message log's `_reasoning` sidecar, not here.
+struct ReasoningSettled {
+    std::string text;
+};
 struct ToolStarted {
     std::string id;
     std::string name;
@@ -55,8 +61,8 @@ struct TurnError {
     std::string message;
 };
 
-using Event = std::variant<Started, AssistantDelta, AssistantSettled, ToolStarted, ToolFinished,
-                           ComponentProposed, TurnFinished, TurnError>;
+using Event = std::variant<Started, AssistantDelta, AssistantSettled, ReasoningSettled, ToolStarted,
+                           ToolFinished, ComponentProposed, TurnFinished, TurnError>;
 
 class EventChannel {
 public:
