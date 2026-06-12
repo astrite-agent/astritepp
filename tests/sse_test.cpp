@@ -147,3 +147,40 @@ TEST_CASE("assistant_message builds the session record: content null for pure to
     CHECK(*text_msg.get("content") == astrite::schema::Value::str("hi"));
     CHECK(text_msg.get("tool_calls") == nullptr);
 }
+
+TEST_CASE("assistant_message omits _reasoning when the turn carried none") {
+    CompletedTurn turn;
+    turn.text = "hello";
+    astrite::schema::Value msg = astrite::llm::assistant_message(turn);
+    CHECK(msg.get("_reasoning") == nullptr);
+}
+
+TEST_CASE("assistant_message embeds _reasoning as opaque, provider-tagged sidecar") {
+    using astrite::schema::Value;
+    CompletedTurn turn;
+    turn.text = "the answer is 42";
+    turn.reasoning.provider = "anthropic";
+    turn.reasoning.model = "claude-haiku-4-5-20251001";
+    turn.reasoning.text = "let me think...";
+    Value::List blocks;
+    Value b = Value::object();
+    b.set("type", Value::str("thinking"));
+    b.set("thinking", Value::str("let me think..."));
+    b.set("signature", Value::str("sig-abc"));
+    blocks.push_back(std::move(b));
+    turn.reasoning.blocks = Value::list(std::move(blocks));
+
+    Value msg = astrite::llm::assistant_message(turn);
+    // Content stays clean — reasoning is NOT folded into the visible text.
+    CHECK(*msg.get("content") == Value::str("the answer is 42"));
+    const Value* r = msg.get("_reasoning");
+    REQUIRE(r != nullptr);
+    CHECK(*r->get("provider") == Value::str("anthropic"));
+    CHECK(*r->get("model") == Value::str("claude-haiku-4-5-20251001"));
+    CHECK(*r->get("text") == Value::str("let me think..."));
+    const Value* persisted = r->get("blocks");
+    REQUIRE(persisted != nullptr);
+    REQUIRE(persisted->as_list() != nullptr);
+    REQUIRE(persisted->as_list()->size() == 1);
+    CHECK(*(*persisted->as_list())[0].get("signature") == Value::str("sig-abc"));
+}

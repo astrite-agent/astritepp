@@ -40,11 +40,27 @@ struct Usage {
     bool present = false;       // true once the server reported usage
 };
 
+// A turn's reasoning/thinking trace. Kept *separate* from text — it is never
+// folded into the assistant's visible content. `text` is the human-readable
+// trace for display; `blocks` is the provider's native, opaque reasoning content
+// (Anthropic thinking+signature blocks, etc.) preserved verbatim so the same
+// provider+model can round-trip it on a tool-use continuation. `provider`/`model`
+// tag who produced it: a different model must drop it (the API's own contract).
+struct Reasoning {
+    std::string text;
+    std::string provider;
+    std::string model;
+    std::optional<schema::Value> blocks;
+
+    [[nodiscard]] bool empty() const { return text.empty() && !blocks.has_value(); }
+};
+
 struct CompletedTurn {
     std::string text;
     std::vector<ToolCall> tool_calls;
     std::string finish_reason;
     Usage usage;
+    Reasoning reasoning{}; // default-init so existing positional aggregate inits still compile
 };
 
 // One entry in a provider's model catalog. `context_limit` is 0 when unknown.
@@ -247,6 +263,21 @@ private:
             calls.push_back(std::move(entry));
         }
         msg.set("tool_calls", Value::list(std::move(calls)));
+    }
+    // Reasoning rides along as an opaque, provider-tagged sidecar — never folded
+    // into `content`. Providers re-emit `blocks` only when provider+model match
+    // (a tool-use continuation on the same model); otherwise they drop it.
+    if (!turn.reasoning.empty()) {
+        Value r = Value::object();
+        r.set("provider", Value::str(turn.reasoning.provider));
+        r.set("model", Value::str(turn.reasoning.model));
+        if (!turn.reasoning.text.empty()) {
+            r.set("text", Value::str(turn.reasoning.text));
+        }
+        if (turn.reasoning.blocks.has_value()) {
+            r.set("blocks", *turn.reasoning.blocks);
+        }
+        msg.set("_reasoning", std::move(r));
     }
     return msg;
 }
