@@ -384,6 +384,11 @@ argv holes are the remaining M7 work; see the deferred items below.*
       continues, stale reasoning auto-drops); commands `/model <id>`, `/provider <name> [model]`
       (guarded vs mid-turn, persisted), and `/models` (catalog fetched off the UI thread). pty-verified:
       switch mid-session, get a reply from the new backend, relaunch onto the saved one.
+- [x] **Reasoning toggle applies live, 2026-06-11**: flipping "show reasoning" in `/config` is now
+      authoritative and rebuilds the backend in place (apply the reasoning env → `make_named_provider`
+      → `set_provider`) instead of waiting for restart; mid-turn it defers to the turn's settle. The
+      toggle's first-run default is seeded from the reasoning env so a power user's env isn't silently
+      overridden. pty-verified: toggle on → a 🧠 reasoning segment appears on the very next turn.
 
 - [ ] `UiTree` value type + the closed `ui.*` constructor set (pure transforms, zero-cap):
       `text`/`markdown`, `row`/`column`/`group`, `card`, `kv`, `code`, `diff`, `list`,

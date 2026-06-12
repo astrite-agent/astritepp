@@ -57,6 +57,38 @@ using astrite::tui::first_line;
 using astrite::tui::render_segment;
 using astrite::tui::segment_body;
 
+// In the TUI, the "show reasoning" toggle is authoritative for whether reasoning
+// is requested; it drives the provider's reasoning env before the backend is
+// (re)built. (The REPL/headless paths read the env directly and are unaffected.)
+// ON preserves an explicit thinking budget if the user set one, else defaults it.
+void apply_reasoning_env(bool on) {
+    if (on) {
+        const char* b = std::getenv("ANTHROPIC_THINKING_BUDGET");
+        if (b == nullptr || std::atoi(b) <= 0) {
+            ::setenv("ANTHROPIC_THINKING_BUDGET", "2048", 1);
+        }
+        ::setenv("OPENAI_REASONING_SUMMARY", "1", 1);
+    } else {
+        ::setenv("ANTHROPIC_THINKING_BUDGET", "0", 1);
+        ::setenv("OPENAI_REASONING_SUMMARY", "0", 1);
+    }
+}
+
+// True if the environment already enables reasoning (used to seed the toggle's
+// first-run default so a power user's env isn't silently overridden).
+bool reasoning_env_on() {
+    const char* b = std::getenv("ANTHROPIC_THINKING_BUDGET");
+    if (b != nullptr && std::atoi(b) > 0) {
+        return true;
+    }
+    const char* s = std::getenv("OPENAI_REASONING_SUMMARY");
+    if (s == nullptr || *s == '\0') {
+        return false;
+    }
+    const std::string v = s;
+    return v != "0" && v != "false";
+}
+
 // The /config panel element, framing the (interactive) checkbox `fields` with
 // read-only runtime info. Returned without center/clear_under — the FTXUI Modal
 // component adds those. The checkboxes themselves are real components (mouse +
@@ -223,15 +255,18 @@ int main(int argc, char** argv) {
     }
     astrite::util::load_dotenv(); // pick up provider keys from a local .env (env wins)
 
-    // Human-owned UI config (display + collapse + reasoning toggles). Loaded before
-    // the runtime so show_reasoning can request provider reasoning; explicit env
-    // still wins (overwrite=0), and toggling it later applies on the next launch.
+    // Human-owned UI config (display + collapse + reasoning toggles), loaded before
+    // the runtime so the reasoning toggle drives the provider build. On a fresh
+    // config, seed show_reasoning from the environment so a power user's reasoning
+    // env isn't silently overridden; thereafter the toggle is authoritative and
+    // applies live (see the /config close handler).
     const std::filesystem::path config_path = ".astrite/config.json";
+    const bool fresh_config = !std::filesystem::exists(config_path);
     astrite::tui::UiConfig cfg = astrite::tui::load_config(config_path);
-    if (cfg.show_reasoning) {
-        ::setenv("ANTHROPIC_THINKING_BUDGET", "2048", /*overwrite=*/0);
-        ::setenv("OPENAI_REASONING_SUMMARY", "1", /*overwrite=*/0);
+    if (fresh_config && reasoning_env_on()) {
+        cfg.show_reasoning = true;
     }
+    apply_reasoning_env(cfg.show_reasoning);
 
     auto components = astrite::frontends::load_components();
     if (!components.has_value()) {
@@ -285,6 +320,8 @@ int main(int argc, char** argv) {
     int popup_sel = 0;
     float modal_scroll = 0.0f;
     bool config_shown = false; // drives the FTXUI Modal component (focusable checkboxes)
+    bool show_reasoning_at_open = cfg.show_reasoning; // detect a toggle while /config is open
+    bool reasoning_rebuild_pending = false;           // a toggle landed mid-turn; apply on settle
     // The transcript as literal focusable FTXUI components (M8). FTXUI manages
     // focus among segments; `body_sel` selects the transcript pane (0) vs the
     // input (1) so focus flows to the right place. `cfg` drives markdown/indices
@@ -338,6 +375,29 @@ int main(int argc, char** argv) {
         bool present = false;
         std::vector<int> history; // total_tokens per model call, for the graph
     } usage;
+
+    // Rebuild the live backend in place to apply a reasoning-toggle change, keeping
+    // the current provider+model (apply_reasoning_env already set the env). The
+    // conversation continues on the new backend, same as /model and /provider.
+    auto rebuild_provider = [&] {
+        apply_reasoning_env(cfg.show_reasoning);
+        auto built = astrite::llm::make_named_provider(provider, model);
+        if (!built.has_value()) {
+            transcript.notice("could not apply reasoning change: " + built.error());
+            return;
+        }
+        runtime.set_provider(*built);
+        provider = runtime.provider_name();
+        model = runtime.model();
+        base_url = runtime.base_url();
+        context_window = runtime.context_window();
+        if (context_window <= 0) {
+            context_window = env_ctx != nullptr ? std::max(1, std::atoi(env_ctx)) : 128000;
+        }
+        transcript.notice(std::string("reasoning ") + (cfg.show_reasoning ? "on" : "off") + " — " +
+                          provider + " · " + model);
+    };
+
     auto apply_event = [&](const astrite::runtime::Event& ev) {
         transcript.apply(ev);
         if (const auto* s = std::get_if<astrite::runtime::AssistantSettled>(&ev);
@@ -356,6 +416,12 @@ int main(int argc, char** argv) {
         // Persist on settled state, not on every streaming delta.
         if (!std::holds_alternative<astrite::runtime::AssistantDelta>(ev)) {
             persist();
+        }
+        // A reasoning toggle that landed mid-turn (set_provider needs the turn lock)
+        // applies as soon as the turn settles.
+        if (reasoning_rebuild_pending && !transcript.turn_active()) {
+            reasoning_rebuild_pending = false;
+            rebuild_provider();
         }
     };
 
@@ -413,6 +479,7 @@ int main(int argc, char** argv) {
             modal_scroll = 0.0f;
         } else if (n == "/config") {
             config_shown = true; // shown via the FTXUI Modal component below
+            show_reasoning_at_open = cfg.show_reasoning; // to detect a live toggle on close
         } else if (n == "/clear") {
             if (!turn_active()) {
                 transcript.clear();
@@ -997,8 +1064,7 @@ int main(int argc, char** argv) {
     Component cb_collapse_tools = Checkbox("Collapse tool calls by default", &cfg.collapse_tool_calls);
     Component cb_collapse_reasoning =
         Checkbox("Collapse reasoning traces by default", &cfg.collapse_reasoning);
-    Component cb_show_reasoning =
-        Checkbox("Show reasoning traces (restart to apply)", &cfg.show_reasoning);
+    Component cb_show_reasoning = Checkbox("Show reasoning traces", &cfg.show_reasoning);
     Component config_fields = Container::Vertical(
         {cb_markdown, cb_index, cb_collapse_tools, cb_collapse_reasoning, cb_show_reasoning});
     Component config_panel_view = Renderer(config_fields, [&] {
@@ -1009,6 +1075,20 @@ int main(int argc, char** argv) {
         if (e == Event::Escape || e == Event::Character("q")) {
             config_shown = false;
             (void)astrite::tui::save_config(config_path, cfg); // persist the human's choices
+            // Toggling "show reasoning" rebuilds the live backend so it applies now,
+            // not on restart. Mid-turn (set_provider needs the turn lock) it defers
+            // to the turn's settle. Other toggles already apply by reference.
+            if (cfg.show_reasoning != show_reasoning_at_open) {
+                if (turn_active()) {
+                    reasoning_rebuild_pending = true;
+                    transcript.notice(std::string("reasoning ") +
+                                      (cfg.show_reasoning ? "on" : "off") +
+                                      " — applies after the current turn");
+                } else {
+                    rebuild_provider();
+                }
+                persist();
+            }
             return true;
         }
         return false; // arrows / space / mouse → the checkboxes
