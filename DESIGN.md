@@ -668,6 +668,17 @@ hash-pinned user-level trust record.
   the progress callback checking a `stop_token`. Translation + folds are unit-tested against
   fixtures; the `astrite-llm` REPL and `ASTRITE_LIVE_TESTS`-gated smokes verify each backend live
   (caching confirmed: a repeated prefix is written then read from cache).
+- **Reasoning is opaque, provider-tagged, and never content.** A turn's thinking/reasoning rides
+  as a sidecar (`CompletedTurn::reasoning`: display text + the provider's native `blocks` +
+  provider/model tag), embedded in the assistant message as `_reasoning` — it is *never* folded
+  into the visible `content`. It round-trips verbatim **only when the same provider+model
+  continues** (a model switch drops it — exactly the API's own contract). This is correctness, not
+  preference: Anthropic extended thinking with tool use *requires* the `thinking` block to lead the
+  assistant turn, so `to_anthropic_messages` re-emits it first (gated on `ANTHROPIC_THINKING_BUDGET`).
+  GPT/Responses captures the reasoning summary for display (full item round-trip across tool calls
+  is a later slice); openai-compat captures `reasoning_content` for display. The UI shows reasoning
+  as its own dim, collapsible `reasoning` segment (collapsed by default, with tool calls, via
+  `UiConfig`); it never streams into the visible token sink.
 - **Cross-turn state is event-sourced** in the JSONL session log and reseeded each turn; the
   blackboard is turn/activation-scoped. There is no mutable long-lived blackboard.
 - **Prompt context is runtime-owned.** The initial system record names the workspace root,

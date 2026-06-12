@@ -155,6 +155,25 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
       tokens in /status), the standalone **`astrite-llm` REPL**, and `ASTRITE_LIVE_TESTS`-gated
       round-trip smokes (skip cleanly without the opt-in + key). Full tool loop verified end to end
       through both native providers via the real agent.
+- [x] **Reasoning/thinking data, the smart way (2026-06-11)**: reasoning is an opaque,
+      provider-tagged sidecar on the turn (`CompletedTurn::reasoning` = display text + native
+      `blocks` + provider/model), embedded in the assistant message as `_reasoning` — *never*
+      folded into the visible `content`. It round-trips verbatim **only on the same
+      provider+model** (a model switch drops it, matching the API contract):
+      - **Anthropic** extended thinking, gated on `ANTHROPIC_THINKING_BUDGET` (off ⇒ today's
+        behavior). Captures `thinking`/`signature`/`redacted_thinking`; `to_anthropic_messages`
+        re-emits the thinking block **first** in the assistant turn (the API requires it before
+        tool_use). Live-verified: clean answer + captured trace, and a two-turn conversation
+        round-trips a valid signed thinking block.
+      - **GPT/Responses**: `OPENAI_REASONING_SUMMARY` requests `reasoning.summary=auto`; the
+        summary is captured for display (no item round-trip yet — tool use is correct without it).
+      - **openai-compat**: captures `reasoning_content`/`reasoning` deltas (display only).
+      Reasoning is never streamed to the visible delta sink. UI: `Segment::Kind::reasoning`
+      (dim/magenta 🧠, collapsible), a `ReasoningSettled` event emitted after the answer, and
+      persisted/restored via `transcript_io`. Config: `UiConfig` (`.astrite/config.json`) adds
+      `collapse_tool_calls` / `collapse_reasoning` (both default-collapse) and `show_reasoning`
+      (the per-provider master enable). Live-verified end to end through `astrite-tui`.
+- [ ] GPT/Responses reasoning-item round-trip across tool calls (encrypted_content / item refs).
 - [ ] Fuzz target: SSE/tool-call accumulator.
 
 ## M5 — Runtime (`src/runtime/`)
@@ -168,8 +187,8 @@ their consumers — M3 confined loader, M7 fs/task — and check off there.*
 - [x] `submit_user_message(text)`: append user msg → walk(`turn`) on a worker `std::jthread` →
       typed events; serialized (one turn at a time); exactly one terminal event per turn.
 - [x] Event channel: bounded MPSC of a sealed event variant (`Started, AssistantDelta,
-      AssistantSettled, ToolStarted, ToolFinished, TurnFinished, TurnError, Notice`); consumer
-      must drain to the terminal event (document the contract).
+      AssistantSettled, ReasoningSettled, ToolStarted, ToolFinished, ComponentProposed,
+      TurnFinished, TurnError`); consumer must drain to the terminal event (document the contract).
 - [ ] TSan job over runtime/channel tests.
 
 ## M6 — **Loop-as-data, end to end** (`components/`, `tools/gen_components/`, readline frontend)
