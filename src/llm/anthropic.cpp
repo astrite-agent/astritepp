@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <map>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include <glaze/json.hpp>
@@ -22,12 +23,16 @@ std::expected<AnthropicConfig, std::string> AnthropicConfig::from_env() {
     const char* model = std::getenv("ANTHROPIC_MODEL");
     const char* base = std::getenv("ANTHROPIC_BASE_URL");
     const char* max_tok = std::getenv("ANTHROPIC_MAX_TOKENS");
+    const char* budget = std::getenv("ANTHROPIC_THINKING_BUDGET");
     int max_tokens = max_tok != nullptr ? std::atoi(max_tok) : 0;
-    return from_env_or(key, model != nullptr ? model : "", base != nullptr ? base : "", max_tokens);
+    int thinking_budget = budget != nullptr ? std::atoi(budget) : 0;
+    return from_env_or(key, model != nullptr ? model : "", base != nullptr ? base : "", max_tokens,
+                       thinking_budget);
 }
 
 AnthropicConfig AnthropicConfig::from_env_or(std::string api_key, std::string model,
-                                             std::string base_url, int max_tokens) {
+                                             std::string base_url, int max_tokens,
+                                             int thinking_budget) {
     AnthropicConfig cfg;
     cfg.api_key = std::move(api_key);
     cfg.model = model.empty() ? "claude-haiku-4-5-20251001" : std::move(model);
@@ -36,6 +41,7 @@ AnthropicConfig AnthropicConfig::from_env_or(std::string api_key, std::string mo
         cfg.base_url.pop_back();
     }
     cfg.max_tokens = max_tokens > 0 ? max_tokens : 4096;
+    cfg.thinking_budget = thinking_budget > 0 ? thinking_budget : 0;
     return cfg;
 }
 
@@ -72,7 +78,8 @@ const std::string* str_of(const Value* v) {
 
 } // namespace
 
-Value to_anthropic_messages(const Value& messages, std::string& system_out, bool cache) {
+Value to_anthropic_messages(const Value& messages, std::string& system_out, bool cache,
+                            const std::string& model, bool thinking) {
     Value::List out;
     Value::List pending; // coalesced tool_result blocks -> one user turn
 
@@ -122,6 +129,23 @@ Value to_anthropic_messages(const Value& messages, std::string& system_out, bool
             out.push_back(std::move(m));
         } else if (*role == "assistant") {
             Value::List blocks;
+            // Reasoning round-trip: re-emit this turn's opaque thinking blocks
+            // FIRST, but only when thinking is on and the sidecar was produced by
+            // anthropic on this same model. Otherwise drop it (model-switch /
+            // disabled => the API would reject or ignore stale thinking).
+            if (thinking) {
+                if (const Value* r = msg.get("_reasoning")) {
+                    const std::string* rp = str_of(r->get("provider"));
+                    const std::string* rm = str_of(r->get("model"));
+                    if (rp != nullptr && *rp == "anthropic" && rm != nullptr && *rm == model) {
+                        if (const Value* tb = r->get("blocks"); tb != nullptr && tb->as_list()) {
+                            for (const Value& b : *tb->as_list()) {
+                                blocks.push_back(b);
+                            }
+                        }
+                    }
+                }
+            }
             if (const std::string* c = str_of(msg.get("content")); c != nullptr && !c->empty()) {
                 Value tb = Value::object();
                 tb.set("type", Value::str("text"));
@@ -197,14 +221,25 @@ Value to_anthropic_tools(const Value& tools) {
 }
 
 std::string build_anthropic_body(const std::string& model, int max_tokens, const Value& messages,
-                                 const Value& tools, bool cache) {
+                                 const Value& tools, bool cache, int thinking_budget) {
+    const bool thinking = thinking_budget > 0;
     Value req = Value::object();
     req.set("model", Value::str(model));
+    // The API requires max_tokens > budget_tokens; give the response headroom.
+    if (thinking && max_tokens <= thinking_budget) {
+        max_tokens = thinking_budget + 1024;
+    }
     req.set("max_tokens", Value::integer(max_tokens));
     req.set("stream", Value::boolean(true));
+    if (thinking) {
+        Value think = Value::object();
+        think.set("type", Value::str("enabled"));
+        think.set("budget_tokens", Value::integer(thinking_budget));
+        req.set("thinking", std::move(think));
+    }
 
     std::string system;
-    req.set("messages", to_anthropic_messages(messages, system, cache));
+    req.set("messages", to_anthropic_messages(messages, system, cache, model, thinking));
     if (!system.empty()) {
         if (cache) {
             Value block = Value::object();
@@ -236,12 +271,16 @@ struct Delta {
     std::optional<std::string> type;
     std::optional<std::string> text;
     std::optional<std::string> partial_json;
+    std::optional<std::string> thinking;  // thinking_delta
+    std::optional<std::string> signature; // signature_delta
     std::optional<std::string> stop_reason;
 };
 struct ContentBlock {
     std::optional<std::string> type;
     std::optional<std::string> id;
     std::optional<std::string> name;
+    std::optional<std::string> thinking; // thinking block initial text (usually "")
+    std::optional<std::string> data;     // redacted_thinking opaque payload
 };
 struct MessageInfo {
     std::optional<Usage> usage;
@@ -286,6 +325,29 @@ public:
                 turn.tool_calls.push_back({call.id, call.name, call.arguments});
             }
         }
+        // Rebuild the opaque thinking blocks in index order for round-trip, and a
+        // human-readable trace for display. Never merged into turn.text.
+        if (!think_.empty()) {
+            using schema::Value;
+            Value::List blocks;
+            std::string trace;
+            for (const auto& [index, tb] : think_) {
+                Value b = Value::object();
+                if (tb.redacted) {
+                    b.set("type", Value::str("redacted_thinking"));
+                    b.set("data", Value::str(tb.data));
+                } else {
+                    b.set("type", Value::str("thinking"));
+                    b.set("thinking", Value::str(tb.thinking));
+                    b.set("signature", Value::str(tb.signature));
+                    trace += tb.thinking;
+                }
+                blocks.push_back(std::move(b));
+            }
+            turn.reasoning.provider = "anthropic";
+            turn.reasoning.text = std::move(trace);
+            turn.reasoning.blocks = Value::list(std::move(blocks));
+        }
         return turn;
     }
 
@@ -295,6 +357,12 @@ private:
         std::string name;
         std::string arguments;
         bool has_name = false;
+    };
+    struct ThinkBlock {
+        bool redacted = false;
+        std::string thinking;
+        std::string signature;
+        std::string data;
     };
 
     void process_line(std::string_view line) {
@@ -322,21 +390,36 @@ private:
             usage_.prompt_tokens =
                 u.input_tokens.value_or(0) + usage_.cache_read_tokens + usage_.cache_write_tokens;
             usage_.present = true;
-        } else if (type == "content_block_start" && ev.content_block.has_value() &&
-                   ev.content_block->type.value_or("") == "tool_use") {
-            Accum& a = calls_[ev.index.value_or(0)];
-            a.id = ev.content_block->id.value_or("");
-            a.name = ev.content_block->name.value_or("");
-            a.has_name = !a.name.empty();
+        } else if (type == "content_block_start" && ev.content_block.has_value()) {
+            const std::string bt = ev.content_block->type.value_or("");
+            if (bt == "tool_use") {
+                Accum& a = calls_[ev.index.value_or(0)];
+                a.id = ev.content_block->id.value_or("");
+                a.name = ev.content_block->name.value_or("");
+                a.has_name = !a.name.empty();
+            } else if (bt == "thinking") {
+                ThinkBlock& tb = think_[ev.index.value_or(0)];
+                tb.redacted = false;
+                tb.thinking += ev.content_block->thinking.value_or("");
+            } else if (bt == "redacted_thinking") {
+                ThinkBlock& tb = think_[ev.index.value_or(0)];
+                tb.redacted = true;
+                tb.data += ev.content_block->data.value_or("");
+            }
         } else if (type == "content_block_delta" && ev.delta.has_value()) {
             const anth_wire::Delta& d = *ev.delta;
-            if (d.type.value_or("") == "text_delta" && d.text.has_value()) {
+            const std::string dt = d.type.value_or("");
+            if (dt == "text_delta" && d.text.has_value()) {
                 text_ += *d.text;
                 if (on_delta_) {
                     on_delta_(*d.text);
                 }
-            } else if (d.type.value_or("") == "input_json_delta" && d.partial_json.has_value()) {
+            } else if (dt == "input_json_delta" && d.partial_json.has_value()) {
                 calls_[ev.index.value_or(0)].arguments += *d.partial_json;
+            } else if (dt == "thinking_delta" && d.thinking.has_value()) {
+                think_[ev.index.value_or(0)].thinking += *d.thinking; // captured, not streamed
+            } else if (dt == "signature_delta" && d.signature.has_value()) {
+                think_[ev.index.value_or(0)].signature += *d.signature;
             }
         } else if (type == "message_delta") {
             if (ev.usage.has_value() && ev.usage->output_tokens.has_value()) {
@@ -355,16 +438,23 @@ private:
     std::string finish_;
     Usage usage_;
     std::map<int, Accum> calls_;
+    std::map<int, ThinkBlock> think_;
 };
 
 } // namespace
+
+CompletedTurn fold_anthropic_sse(std::string_view sse, const DeltaSink& on_delta) {
+    AnthropicAccumulator acc(on_delta);
+    acc.feed(sse);
+    return acc.settle();
+}
 
 std::expected<CompletedTurn, std::string>
 AnthropicProvider::stream_chat(const Value& messages, const Value& tools, DeltaSink on_delta,
                                std::stop_token cancel) {
     const std::string url = cfg_.base_url + "/messages";
-    const std::string body =
-        build_anthropic_body(cfg_.model, cfg_.max_tokens, messages, tools, /*cache=*/true);
+    const std::string body = build_anthropic_body(cfg_.model, cfg_.max_tokens, messages, tools,
+                                                  /*cache=*/true, cfg_.thinking_budget);
     const std::vector<std::string> headers = {
         "Content-Type: application/json",
         "x-api-key: " + cfg_.api_key,
@@ -382,7 +472,13 @@ AnthropicProvider::stream_chat(const Value& messages, const Value& tools, DeltaS
     if (r.status != 200) {
         return std::unexpected("HTTP " + std::to_string(r.status) + ": " + r.tail);
     }
-    return acc.settle();
+    CompletedTurn turn = acc.settle();
+    // Stamp the producing model so a continuation can gate the thinking-block
+    // round-trip on an exact same-model match.
+    if (!turn.reasoning.empty()) {
+        turn.reasoning.model = cfg_.model;
+    }
+    return turn;
 }
 
 namespace anth_wire {

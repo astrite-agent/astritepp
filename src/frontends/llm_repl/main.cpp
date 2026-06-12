@@ -88,6 +88,9 @@ int main() {
             continue;
         }
         conversation.push_back(llm::assistant_message(*result));
+        if (!result->reasoning.text.empty()) {
+            std::printf("[reasoning] %s\n", result->reasoning.text.c_str());
+        }
         const llm::Usage& u = result->usage;
         if (u.present) {
             std::printf("[usage prompt=%d completion=%d total=%d cache_read=%d cache_write=%d]\n",
