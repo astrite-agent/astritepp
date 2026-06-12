@@ -21,6 +21,7 @@
 #include <ftxui/screen/box.hpp>
 #include <ftxui/screen/color.hpp>
 
+#include "frontends/tui/config.hpp"
 #include "frontends/tui/segment_render.hpp"
 #include "frontends/tui/transcript.hpp"
 
@@ -32,8 +33,10 @@ using ProposalAction = std::function<void(const std::string& name, bool approve)
 
 class TranscriptView {
 public:
-    TranscriptView(Transcript& transcript, const bool* markdown, const bool* show_index)
-        : transcript_(transcript), markdown_(markdown), show_index_(show_index),
+    // `config` drives rendering (markdown, indices) and the per-kind collapse
+    // defaults; it may be null (everything falls back to expanded / plain text).
+    TranscriptView(Transcript& transcript, const UiConfig* config)
+        : transcript_(transcript), config_(config),
           container_(ftxui::Container::Vertical({}, &selected_)) {}
 
     [[nodiscard]] ftxui::Component component() const { return container_; }
@@ -90,7 +93,7 @@ public:
         }
         bool grew = false;
         while (built_ < n) {
-            collapsed_.push_back(false);
+            collapsed_.push_back(default_collapsed(built_));
             container_->Add(make_segment(built_));
             ++built_;
             grew = true;
@@ -99,6 +102,24 @@ public:
     }
 
 private:
+    // A new segment's initial collapse state: tool calls and reasoning traces are
+    // folded by default (config-controlled) since they're noisy/long; everything
+    // else starts expanded.
+    [[nodiscard]] bool default_collapsed(int index) const {
+        const auto& segs = transcript_.segments();
+        if (config_ == nullptr || index < 0 || index >= static_cast<int>(segs.size())) {
+            return false;
+        }
+        switch (segs[static_cast<std::size_t>(index)].kind) {
+        case Segment::Kind::tool:
+            return config_->collapse_tool_calls;
+        case Segment::Kind::reasoning:
+            return config_->collapse_reasoning;
+        default:
+            return false;
+        }
+    }
+
     ftxui::Component make_segment(int index) {
         using namespace ftxui;
         const auto& segs = transcript_.segments();
@@ -112,9 +133,10 @@ private:
             if (index >= static_cast<int>(s.size())) {
                 return text("");
             }
+            const bool show_index = (config_ != nullptr && config_->show_index) || focused;
+            const bool markdown = config_ != nullptr && config_->markdown;
             Element el = render_segment(s[static_cast<std::size_t>(index)], index, focused,
-                                        is_collapsed(index), (show_index_ && *show_index_) || focused,
-                                        markdown_ && *markdown_);
+                                        is_collapsed(index), show_index, markdown);
             if (focused) {
                 el = el | focus; // FTXUI scrolls the frame to the focused segment
             }
@@ -196,8 +218,7 @@ private:
     }
 
     Transcript& transcript_;
-    const bool* markdown_;
-    const bool* show_index_;
+    const UiConfig* config_;
     ProposalAction on_action_;
     int selected_ = 0; // declared before container_: Container::Vertical captures &selected_
     int built_ = 0;

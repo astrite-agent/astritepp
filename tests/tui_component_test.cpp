@@ -9,6 +9,7 @@
 #include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 
+#include "frontends/tui/config.hpp"
 #include "frontends/tui/transcript.hpp"
 #include "frontends/tui/transcript_view.hpp"
 
@@ -25,8 +26,8 @@ std::string render_to_string(const ftxui::Component& c, int w = 60, int h = 12) 
 
 TEST_CASE("transcript view: sync builds one component per segment") {
     Transcript t;
-    bool md = false, idx = false;
-    TranscriptView v(t, &md, &idx);
+    UiConfig cfg;
+    TranscriptView v(t, &cfg);
 
     CHECK(v.count() == 0);
     t.user("hello");
@@ -43,8 +44,9 @@ TEST_CASE("transcript view: sync builds one component per segment") {
 
 TEST_CASE("transcript view: Enter toggles the focused segment's collapse") {
     Transcript t;
-    bool md = false, idx = false;
-    TranscriptView v(t, &md, &idx);
+    UiConfig cfg;
+    cfg.collapse_tool_calls = false; // start expanded so the toggle is observable
+    TranscriptView v(t, &cfg);
     // a tool segment collapses to a one-line head
     t.apply(astrite::runtime::ToolStarted{"id", "fs_read", "{}"});
     t.apply(astrite::runtime::ToolFinished{"id", "fs_read", "line one\nline two\nline three"});
@@ -60,8 +62,8 @@ TEST_CASE("transcript view: Enter toggles the focused segment's collapse") {
 
 TEST_CASE("transcript view: collapse_all / expand_all and select clamp") {
     Transcript t;
-    bool md = false, idx = false;
-    TranscriptView v(t, &md, &idx);
+    UiConfig cfg;
+    TranscriptView v(t, &cfg);
     for (int i = 0; i < 4; ++i) {
         t.user("msg" + std::to_string(i));
     }
@@ -82,8 +84,8 @@ TEST_CASE("transcript view: collapse_all / expand_all and select clamp") {
 
 TEST_CASE("transcript view: clearing the transcript rebuilds from scratch") {
     Transcript t;
-    bool md = false, idx = false;
-    TranscriptView v(t, &md, &idx);
+    UiConfig cfg;
+    TranscriptView v(t, &cfg);
     t.user("a");
     t.user("b");
     v.sync();
@@ -99,6 +101,35 @@ TEST_CASE("transcript view: clearing the transcript rebuilds from scratch") {
     t.user("fresh");
     CHECK(v.sync());
     CHECK(v.count() == 1);
+}
+
+TEST_CASE("transcript view: collapse-by-default follows config per segment kind") {
+    Transcript t;
+    UiConfig cfg; // defaults: collapse_tool_calls = collapse_reasoning = true
+    TranscriptView v(t, &cfg);
+    t.user("hi");                                                         // 0 user
+    t.apply(astrite::runtime::AssistantSettled{"answer", 0, 0, 0, false}); // 1 assistant
+    t.apply(astrite::runtime::ReasoningSettled{"because"});               // 2 reasoning
+    t.apply(astrite::runtime::ToolStarted{"id", "fs_read", "{}"});
+    t.apply(astrite::runtime::ToolFinished{"id", "fs_read", "data"}); // 3 tool
+    v.sync();
+    CHECK_FALSE(v.is_collapsed(0)); // user: expanded
+    CHECK_FALSE(v.is_collapsed(1)); // assistant: expanded
+    CHECK(v.is_collapsed(2));        // reasoning: collapsed by default
+    CHECK(v.is_collapsed(3));        // tool: collapsed by default
+}
+
+TEST_CASE("transcript view: config can disable collapse-by-default") {
+    Transcript t;
+    UiConfig cfg;
+    cfg.collapse_tool_calls = false;
+    cfg.collapse_reasoning = false;
+    TranscriptView v(t, &cfg);
+    t.apply(astrite::runtime::ReasoningSettled{"r"});
+    t.apply(astrite::runtime::ToolStarted{"id", "x", "{}"});
+    v.sync();
+    CHECK_FALSE(v.is_collapsed(0));
+    CHECK_FALSE(v.is_collapsed(1));
 }
 
 TEST_CASE("a focused empty input shows a cursor; an unfocused one does not") {
@@ -135,8 +166,8 @@ TEST_CASE("a focused empty input shows a cursor; an unfocused one does not") {
 
 TEST_CASE("transcript view: a proposal card's Approve/Reject buttons fire the action") {
     Transcript t;
-    bool md = false, idx = false;
-    TranscriptView v(t, &md, &idx);
+    UiConfig cfg;
+    TranscriptView v(t, &cfg);
     std::string name;
     bool approve = false;
     int calls = 0;
@@ -166,8 +197,9 @@ TEST_CASE("transcript view: a proposal card's Approve/Reject buttons fire the ac
 
 TEST_CASE("transcript view: clicking a segment toggles its collapse") {
     Transcript t;
-    bool md = false, idx = false;
-    TranscriptView v(t, &md, &idx);
+    UiConfig cfg;
+    cfg.collapse_tool_calls = false; // start expanded so the click-toggle is observable
+    TranscriptView v(t, &cfg);
     t.apply(astrite::runtime::ToolStarted{"id", "fs_read", "{}"});
     t.apply(astrite::runtime::ToolFinished{"id", "fs_read", "a\nb\nc"});
     v.sync();
@@ -185,7 +217,7 @@ TEST_CASE("transcript view: clicking a segment toggles its collapse") {
 
 TEST_CASE("transcript view: a restored, already-approved proposal shows its outcome") {
     Transcript t;
-    bool md = false, idx = false;
+    UiConfig cfg;
     Segment s; // as if loaded from disk
     s.kind = Segment::Kind::proposal;
     s.tool_name = "wave";
@@ -194,7 +226,7 @@ TEST_CASE("transcript view: a restored, already-approved proposal shows its outc
     s.done = true;
     t.restore({s});
 
-    TranscriptView v(t, &md, &idx);
+    TranscriptView v(t, &cfg);
     v.set_proposal_action([](const std::string&, bool) {});
     v.sync();
     std::string out = render_to_string(v.component(), 60, 6);
@@ -204,8 +236,8 @@ TEST_CASE("transcript view: a restored, already-approved proposal shows its outc
 
 TEST_CASE("transcript view: a proposal segment renders as kernel chrome") {
     Transcript t;
-    bool md = false, idx = false;
-    TranscriptView v(t, &md, &idx);
+    UiConfig cfg;
+    TranscriptView v(t, &cfg);
     astrite::runtime::ComponentProposed p;
     p.name = "shout";
     p.kind = "tool";

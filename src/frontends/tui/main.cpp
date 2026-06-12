@@ -31,6 +31,7 @@
 
 #include "frontends/common.hpp"
 #include "frontends/tui/commands.hpp"
+#include "frontends/tui/config.hpp"
 #include "frontends/tui/history.hpp"
 #include "frontends/tui/markdown_render.hpp"
 #include "frontends/tui/segment_render.hpp"
@@ -218,6 +219,16 @@ int main(int argc, char** argv) {
     }
     astrite::util::load_dotenv(); // pick up provider keys from a local .env (env wins)
 
+    // Human-owned UI config (display + collapse + reasoning toggles). Loaded before
+    // the runtime so show_reasoning can request provider reasoning; explicit env
+    // still wins (overwrite=0), and toggling it later applies on the next launch.
+    const std::filesystem::path config_path = ".astrite/config.json";
+    astrite::tui::UiConfig cfg = astrite::tui::load_config(config_path);
+    if (cfg.show_reasoning) {
+        ::setenv("ANTHROPIC_THINKING_BUDGET", "2048", /*overwrite=*/0);
+        ::setenv("OPENAI_REASONING_SUMMARY", "1", /*overwrite=*/0);
+    }
+
     auto components = astrite::frontends::load_components();
     if (!components.has_value()) {
         std::fprintf(stderr, "astrite-tui: component load failed: %s\n",
@@ -253,12 +264,11 @@ int main(int argc, char** argv) {
     int popup_sel = 0;
     float modal_scroll = 0.0f;
     bool config_shown = false; // drives the FTXUI Modal component (focusable checkboxes)
-    bool pref_markdown = true;
-    bool pref_index = false;
     // The transcript as literal focusable FTXUI components (M8). FTXUI manages
     // focus among segments; `body_sel` selects the transcript pane (0) vs the
-    // input (1) so focus flows to the right place.
-    astrite::tui::TranscriptView tv(transcript, &pref_markdown, &pref_index);
+    // input (1) so focus flows to the right place. `cfg` drives markdown/indices
+    // and per-kind collapse defaults.
+    astrite::tui::TranscriptView tv(transcript, &cfg);
     int body_sel = 1;
     int cursor_pos = 0;               // shared with the Input widget (readline editing)
     bool paste_mode = false;          // inside a bracketed paste (newlines = literal, not submit)
@@ -882,12 +892,19 @@ int main(int argc, char** argv) {
         return false;
     });
 
-    // /config as a real FTXUI Modal: checkboxes bound to the preference bools get
+    // /config as a real FTXUI Modal: checkboxes bound to the config fields get
     // keyboard + mouse for free; Modal routes events to it (and applies
-    // clear_under) while config_shown, and back to main_view otherwise.
-    Component cb_markdown = Checkbox("Render markdown", &pref_markdown);
-    Component cb_index = Checkbox("Always show segment indices", &pref_index);
-    Component config_fields = Container::Vertical({cb_markdown, cb_index});
+    // clear_under) while config_shown, and back to main_view otherwise. Changes are
+    // persisted to .astrite/config.json when the modal closes.
+    Component cb_markdown = Checkbox("Render markdown", &cfg.markdown);
+    Component cb_index = Checkbox("Always show segment indices", &cfg.show_index);
+    Component cb_collapse_tools = Checkbox("Collapse tool calls by default", &cfg.collapse_tool_calls);
+    Component cb_collapse_reasoning =
+        Checkbox("Collapse reasoning traces by default", &cfg.collapse_reasoning);
+    Component cb_show_reasoning =
+        Checkbox("Show reasoning traces (restart to apply)", &cfg.show_reasoning);
+    Component config_fields = Container::Vertical(
+        {cb_markdown, cb_index, cb_collapse_tools, cb_collapse_reasoning, cb_show_reasoning});
     Component config_panel_view = Renderer(config_fields, [&] {
         return config_panel(model, base_url, workspace, policy, session_path,
                             config_fields->Render());
@@ -895,6 +912,7 @@ int main(int argc, char** argv) {
     Component config_modal = CatchEvent(config_panel_view, [&](Event e) {
         if (e == Event::Escape || e == Event::Character("q")) {
             config_shown = false;
+            (void)astrite::tui::save_config(config_path, cfg); // persist the human's choices
             return true;
         }
         return false; // arrows / space / mouse → the checkboxes
